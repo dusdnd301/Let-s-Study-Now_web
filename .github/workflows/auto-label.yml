@@ -1,43 +1,38 @@
 name: Auto Label
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened]
 
 jobs:
   label:
     runs-on: ubuntu-latest
-    # --- 🚨 수정된 권한 설정 🚨 ---
     permissions:
-      issues: write 
-    # ------------------------------
+      pull-requests: write
+      issues: write
     steps:
       - name: 자동 라벨 추가
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const title = context.payload.pull_request.title.toLowerCase();
             let labels = [];
-
-            // 커밋 타입별 라벨 매칭
+            
             if (title.includes('feat:')) labels.push('feature');
             if (title.includes('fix:')) labels.push('bug');
             if (title.includes('docs:')) labels.push('documentation');
-            if (title.includes('style:')) labels.push('enhancement');
-            if (title.includes('design:')) labels.push('enhancement');
-            if (title.includes('test:')) labels.push('testing'); 
-            if (title.includes('refactor:')) labels.push('refactor');
-            if (title.includes('build:')) labels.push('enhancement');
-            if (title.includes('ci:')) labels.push('ci/cd');
-            if (title.includes('perf:')) labels.push('performance');
-            if (title.includes('chore:')) labels.push('maintenance');
-
-            // 라벨 추가
+            if (title.includes('style:') || title.includes('design:')) labels.push('enhancement');
+            if (title.includes('refactor:')) labels.push('enhancement');
+            if (title.includes('test:')) labels.push('enhancement');
+            if (title.includes('chore:')) labels.push('enhancement');
+            
             if (labels.length > 0) {
               await github.rest.issues.addLabels({
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                labels
+                labels: labels
               });
             }
+

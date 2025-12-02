@@ -1,4 +1,5 @@
 name: Frontend PR Auto Comment
+
 on:
   pull_request_target:
     types: [opened]
@@ -7,24 +8,26 @@ jobs:
   comment:
     runs-on: ubuntu-latest
     permissions:
-      issues: write # 댓글(Issue Comment) 작성을 위한 필수 권한
-      pull-requests: read
+      pull-requests: write
+      issues: write
     steps:
       - name: PR 자동 댓글
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body = "🎨 **프론트엔드 PR이 생성되었습니다!** \n\n" +
-                         "--- \n" +
-                         "## 📋 확인 사항 \n" +
-                         "- [ ] TypeScript 컴파일 에러 없음 \n" +
-                         "- [ ] 브라우저 테스트 완료 \n" +
-                         "- [ ] API 연동 테스트 완료 \n\n" +
-                         "리뷰 시작하겠습니다! 🚀";
-
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body
+              body: `🎨 **프론트엔드 PR이 생성되었습니다!**
+
+---
+
+## 📋 확인 사항
+- [ ] TypeScript 컴파일 에러 없음
+- [ ] 브라우저 테스트 완료
+- [ ] API 연동 테스트 완료
+
+리뷰 시작하겠습니다! 🚀`
             });
