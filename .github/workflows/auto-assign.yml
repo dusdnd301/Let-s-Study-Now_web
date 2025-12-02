@@ -1,25 +1,32 @@
-# Set to true to add reviewers to pull requests
-addReviewers: true
+name: Auto Assign Reviewers
 
-# Set to true to add assignees to pull requests
-addAssignees: author
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
 
-# A list of reviewers to be added to pull requests (GitHub user name)
-reviewers: 
-  - GREEN
-  - RED
-  - BLUE
-  - YELLOW
+permissions:
+  pull-requests: write
 
-# A number of reviewers added to the pull request
-# Set 0 to add all the reviewers (default: 0)
-numberOfReviewers: 3
+jobs:
+  add-reviewers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto Assign Reviewers
+        uses: kentaro-m/auto-assign-action@v1.2.1
+        with:
+          repo-token: "${{ secrets.GITHUB_TOKEN }}"
+          addReviewers: true
+          addAssignees: author
 
-# A number of assignees to add to the pull request
-# Set to 0 to add all of the assignees.
-# Uses numberOfReviewers if unset.
-numberOfAssignees: 1
+          reviewers: |
+            GREEN
+            RED
+            BLUE
+            YELLOW
 
-# A list of keywords to be skipped the process that add reviewers if pull requests include it
-skipKeywords:
-  - wip
+          numberOfReviewers: 3
+          numberOfAssignees: 1
+
+          skipKeywords: |
+            wip
+            WIP
