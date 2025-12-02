@@ -1,4 +1,4 @@
-name: PR Merged Celebration
+name: PR Merged Celebration 🥳
 
 on:
   pull_request:
@@ -6,19 +6,26 @@ on:
 
 jobs:
   celebrate:
+    # PR이 닫혔고 (closed) 동시에 병합(merged)되었을 때만 실행
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    
+    # --- 🚨 권한 수정: issues: write 필수 🚨 ---
     permissions:
-      pull-requests: write
-      contents: write
+      issues: write # PR 댓글 작성 권한
+      pull-requests: read # (선택) PR 정보를 읽기 위한 권한
+      contents: read # (선택) GITHUB_TOKEN의 기본 권한을 유지
+    # ----------------------------------------
+    
     steps:
       - name: 머지 축하 메시지
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.issues.createComment({
+            // await를 사용하여 API 호출이 완료될 때까지 기다립니다.
+            await github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: '🎉 PR이 성공적으로 머지되었습니다! 수고하셨습니다! 👏'
-            })
+              body: '🎉 **PR이 성공적으로 머지되었습니다! 수고하셨습니다!** 👏'
+            });
