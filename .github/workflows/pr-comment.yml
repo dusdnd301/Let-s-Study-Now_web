@@ -18,14 +18,16 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `🎨 프론트엔드 PR이 생성되었습니다!
+              body: `
+🎨 프론트엔드 PR이 생성되었습니다!
 
-              ## 확인 사항
-              - [ ] ESLint 통과
-              - [ ] TypeScript 컴파일 에러 없음
-              - [ ] 브라우저 테스트 완료
-              - [ ] 반응형 확인 (모바일/태블릿/PC)
-              - [ ] API 연동 테스트 완료
+## 확인 사항
+- [ ] ESLint 통과
+- [ ] TypeScript 컴파일 에러 없음
+- [ ] 브라우저 테스트 완료
+- [ ] 반응형 확인 (모바일/태블릿/PC)
+- [ ] API 연동 테스트 완료
 
-              리뷰 시작하겠습니다! 🚀`
+리뷰 시작하겠습니다! 🚀
+              `
             })
