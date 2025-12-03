@@ -27,15 +27,8 @@ import {
   sessionAPI, 
   SessionStartRequestDto,
   SessionEndResultDto,
-  LevelInfoDto,
-  chatAPI,
-  ChatMessage as APIChatMessage,
+  LevelInfoDto
 } from "@/lib/api";
-import {
-  webSocketService,
-  WebSocketMessage,
-  MessageType,
-} from "@/lib/websocket";
 import {
   Users,
   Clock,
@@ -58,11 +51,9 @@ import {
 } from "lucide-react";
 
 interface ChatMessage {
-  id: number;
-  type: MessageType;
-  sender: string;
-  senderId?: number;
-  senderProfileImage?: string;
+  id: string;
+  type: "text" | "image" | "file" | "system" | "question";
+  sender?: string;
   content: string;
   imageUrl?: string;
   fileName?: string;
@@ -70,8 +61,6 @@ interface ChatMessage {
   timestamp: Date;
   answers?: HelpAnswer[];
   status?: "open" | "helping" | "resolved";
-  refId?: number;
-  isSolved?: boolean;
 }
 
 interface Participant {
@@ -82,10 +71,8 @@ interface Participant {
 }
 
 interface HelpAnswer {
-  id: number;
+  id: string;
   answerer: string;
-  answererId?: number;
-  answererProfileImage?: string;
   content: string;
   timestamp: Date;
   isAccepted?: boolean;
@@ -137,7 +124,7 @@ const OpenStudyRoomPage: React.FC = () => {
   const [questionFileName, setQuestionFileName] = useState<string | null>(null);
 
   // Answer input for specific question
-  const [answerInputs, setAnswerInputs] = useState<Record<number, string>>({});
+  const [answerInputs, setAnswerInputs] = useState<Record<string, string>>({});
 
   // Question list popover
   const [questionListOpen, setQuestionListOpen] = useState(false);
@@ -204,11 +191,13 @@ const OpenStudyRoomPage: React.FC = () => {
 
     // ✅ "공부중" 상태일 때만 타이머 시작
     if (myStatus === "studying") {
+      // ✅ 함수형 업데이트를 사용하여 항상 최신 상태를 참조
       intervalRef.current = setInterval(() => {
         setCurrentSeconds((prevSeconds) => prevSeconds + 1);
       }, 1000);
     }
 
+    // 메모리 누수 방지를 위한 클린업
     return () => {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -217,186 +206,7 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [myStatus]);
 
-// ✅ WebSocket 메시지 수신 처리
-const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
-  console.log("📩 WebSocket message received:", wsMessage);
-
-  // ✅ id 또는 messageId 사용
-  const messageId = wsMessage.id || wsMessage.messageId || 0;
-
-  const newMessage: ChatMessage = {
-    id: messageId,  // ✅ 둘 중 하나 사용
-    type: wsMessage.type,
-    sender: wsMessage.sender,
-    senderId: undefined,
-    senderProfileImage: undefined,
-    content: wsMessage.message,
-    imageUrl: wsMessage.imageUrl,
-    timestamp: new Date(wsMessage.sentAt),
-    refId: wsMessage.refId,
-    isSolved: wsMessage.isSolved,
-  };
-
-  if (wsMessage.type === "QUESTION") {
-    newMessage.status = "open";
-    newMessage.answers = [];
-    console.log("➕ Adding QUESTION message:", newMessage);
-    setMessages((prev) => [...prev, newMessage]);
-    
-  } else if (wsMessage.type === "ANSWER") {
-    console.log("💬 ANSWER received:", {
-      id: messageId,
-      refId: wsMessage.refId,
-      sender: wsMessage.sender,
-      message: wsMessage.message,
-    });
-
-    if (!wsMessage.refId) {
-      console.error("❌ ANSWER has no refId!");
-      return;
-    }
-
-    setMessages((prev) => {
-      const updated = prev.map((msg) => {
-        if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-          console.log("✅ Found matching QUESTION:", msg.id);
-
-          const newAnswer: HelpAnswer = {
-            id: messageId,  // ✅ 수정
-            answerer: wsMessage.sender,
-            answererId: undefined,
-            answererProfileImage: undefined,
-            content: wsMessage.message,
-            timestamp: new Date(wsMessage.sentAt),
-            isAccepted: false,
-          };
-
-          console.log("➕ Adding answer to question:", newAnswer);
-
-          return {
-            ...msg,
-            answers: [...(msg.answers || []), newAnswer],
-            status: "helping" as const,
-          };
-        }
-        return msg;
-      });
-
-      console.log("📦 Updated messages:", updated);
-      return updated;
-    });
-    
-  } else if (wsMessage.type === "SOLVE") {
-    console.log("✅ SOLVE message received:", wsMessage);
-
-    if (wsMessage.refId) {
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-            console.log("✅ Marking question as SOLVED:", msg.id);
-            return {
-              ...msg,
-              status: "resolved" as const,
-              isSolved: true,
-            };
-          }
-          return msg;
-        })
-      );
-    }
-    
-    addSystemMessage(wsMessage.message);
-    
-  } else if (wsMessage.type === "SYSTEM") {
-    addSystemMessage(wsMessage.message);
-    
-  } else {
-    console.log("➕ Adding TALK message:", newMessage);
-    setMessages((prev) => [...prev, newMessage]);
-  }
-};
-
-  // ✅ 채팅 내역 불러오기
-const loadChatHistory = async (roomIdNum: number) => {
-  try {
-    const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
-    
-    console.log("📦 Chat history response:", response);
-    
-    // ✅ 배열로 직접 반환됨
-    if (!Array.isArray(response)) {
-      console.warn("⚠️ Chat history is not an array:", response);
-      setMessages([]);
-      return;
-    }
-    
-    if (response.length === 0) {
-      console.log("✅ No chat history found");
-      setMessages([]);
-      return;
-    }
-    
-    // API 응답을 ChatMessage 형식으로 변환
-    const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
-      const baseMessage: ChatMessage = {
-        id: apiMsg.id,  // ✅ id 사용
-        type: apiMsg.type,
-        sender: apiMsg.sender,
-        senderId: undefined,
-        senderProfileImage: undefined,
-        content: apiMsg.message,
-        imageUrl: apiMsg.imageUrl,
-        timestamp: new Date(apiMsg.sentAt),  // ✅ sentAt 사용
-        refId: apiMsg.refId,
-        isSolved: apiMsg.isSolved,
-      };
-
-      if (apiMsg.type === "QUESTION") {
-        baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
-        baseMessage.answers = [];
-      }
-
-      return baseMessage;
-    });
-
-    // 답변 메시지들을 해당 질문에 연결
-    loadedMessages.forEach((msg) => {
-      if (msg.type === "ANSWER" && msg.refId) {
-        const questionMsg = loadedMessages.find(
-          (m) => m.id === msg.refId && m.type === "QUESTION"
-        );
-        if (questionMsg) {
-          const answer: HelpAnswer = {
-            id: msg.id,
-            answerer: msg.sender,
-            answererId: undefined,
-            answererProfileImage: undefined,
-            content: msg.content,
-            timestamp: msg.timestamp,
-          };
-          if (!questionMsg.answers) questionMsg.answers = [];
-          questionMsg.answers.push(answer);
-          if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
-            questionMsg.status = "helping";
-          }
-        }
-      }
-    });
-
-    // ANSWER 타입 제외
-    const filteredMessages = loadedMessages.filter(
-      (msg) => msg.type !== "ANSWER"
-    );
-
-    setMessages(filteredMessages);
-    console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
-  } catch (error) {
-    console.error("❌ Failed to load chat history:", error);
-    setMessages([]);
-  }
-};
-
-  // ✅ 방 입장 및 WebSocket 연결
+  // 방 입장 처리
   useEffect(() => {
     if (!user || !roomId || hasJoinedRef.current) return;
 
@@ -430,10 +240,12 @@ const loadChatHistory = async (roomIdNum: number) => {
           return;
         }
 
+        // ✅ 방 생성자인지 확인
         const isCreator =
           roomData.creatorUsername === user.username ||
           (roomData.createdBy && roomData.createdBy === user.id);
 
+        // ✅ 생성자가 아닐 때만 joinRoom 호출
         if (!isCreator) {
           try {
             await openStudyAPI.joinRoom(roomId);
@@ -453,45 +265,34 @@ const loadChatHistory = async (roomIdNum: number) => {
           console.log("Room creator, skipping joinRoom call");
         }
 
-        // ✅ WebSocket 연결
-        webSocketService.connect(
-          () => {
-            console.log("WebSocket connected successfully");
-            const roomIdNum = parseInt(roomId, 10);
-            
-            // 채팅 내역 불러오기
-            loadChatHistory(roomIdNum);
-            
-            // 구독 시작
-            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
-          },
-          (error) => {
-            console.error("WebSocket connection failed:", error);
-            toast({
-              title: "연결 오류",
-              description: "채팅 서버 연결에 실패했습니다.",
-              variant: "destructive",
-            });
-          }
-        );
-
-        // ✅ 스터디 세션 시작
+        // ✅ 스터디 세션 시작 연동
         try {
           const roomIdNum = parseInt(roomId, 10);
           if (!isNaN(roomIdNum)) {
-            console.log("Starting session...");
+            console.log("Calling sessionAPI.startSession with:", { studyType: 'OPEN_STUDY', roomId: roomIdNum });
             const sessionResponse = await sessionAPI.startSession({
-              studyType: "OPEN_STUDY",
-              roomId: roomIdNum,
+              studyType: 'OPEN_STUDY',
+              roomId: roomIdNum
             });
-            console.log("Session started:", sessionResponse);
-
+            console.log("Session API response:", sessionResponse);
+            
             setSessionId(sessionResponse.sessionId);
             setIsSessionActive(true);
             setCurrentSeconds(0);
+            console.log("Session state updated:", {
+              sessionId: sessionResponse.sessionId,
+              isSessionActive: true
+            });
+          } else {
+            console.error("Invalid roomId:", roomId);
           }
         } catch (sessionError: any) {
           console.error("Failed to start session:", sessionError);
+          console.error("Session error details:", {
+            message: sessionError?.message,
+            stack: sessionError?.stack
+          });
+          // 세션 시작 실패해도 방 입장은 계속 진행
         }
 
         localStorage.setItem("currentOpenStudyRoom", roomId);
@@ -508,6 +309,8 @@ const loadChatHistory = async (roomIdNum: number) => {
             },
           ]);
         }
+
+        addSystemMessage(`${user.username}님이 입장했습니다.`);
 
         toast({
           title: "입장 완료",
@@ -531,20 +334,7 @@ const loadChatHistory = async (roomIdNum: number) => {
     };
 
     joinRoom();
-
-    // Cleanup
-    return () => {
-      if (roomId && hasJoinedRef.current) {
-        const roomIdNum = parseInt(roomId, 10);
-        if (!isNaN(roomIdNum)) {
-          webSocketService.unsubscribe(roomIdNum, "OPEN");
-        }
-        webSocketService.disconnect();
-      }
-    };
   }, [user, roomId, navigate]);
-
-  
 
   // 브라우저 이벤트 처리
   useEffect(() => {
@@ -592,6 +382,39 @@ const loadChatHistory = async (roomIdNum: number) => {
     }
   };
 
+  const deleteRoom = async () => {
+    if (!roomId || isLeavingRef.current) return;
+    isLeavingRef.current = true;
+
+    try {
+      localStorage.removeItem("currentOpenStudyRoom");
+      await openStudyAPI.deleteRoom(roomId);
+      toast({
+        title: "방 삭제 완료",
+        description: "스터디 방이 삭제되었습니다.",
+      });
+      hasJoinedRef.current = false;
+    } catch (error: any) {
+      console.error("Failed to delete room:", error);
+      localStorage.removeItem("currentOpenStudyRoom");
+      hasJoinedRef.current = false;
+
+      // ✅ 500 에러 발생해도 방 나가기는 성공으로 처리
+      if (error?.message?.includes("500")) {
+        toast({
+          title: "방 나가기 완료",
+          description: "스터디룸에서 나왔습니다.",
+        });
+      } else {
+        toast({
+          title: "오류",
+          description: error?.message || "방 삭제에 실패했습니다.",
+          variant: "destructive",
+        });
+      }
+    }
+  };
+
   const handleStatusToggle = (newStatus: "studying" | "resting") => {
     if (myStatus === newStatus) return;
 
@@ -601,7 +424,9 @@ const loadChatHistory = async (roomIdNum: number) => {
         studySessions: prev.studySessions + 1,
       }));
       addSystemMessage(
-        `${user?.username}님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
+        `${
+          user?.username
+        }님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
           currentSeconds
         )})`
       );
@@ -629,117 +454,96 @@ const loadChatHistory = async (roomIdNum: number) => {
     });
   };
 
-  // ✅ 메시지 전송 (WebSocket 사용)
-  const handleSendMessage = async () => {
-    if (!messageInput.trim() || !roomId) return;
+  const handleSendMessage = () => {
+    if (!messageInput.trim()) return;
 
-    try {
-      const roomIdNum = parseInt(roomId, 10);
+    if (isQuestionMode) {
+      // 질문 메시지 전송
+      const newMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "question",
+        sender: user?.username || "익명",
+        content: messageInput,
+        imageUrl: questionImage || undefined,
+        fileName: questionFileName || undefined,
+        timestamp: new Date(),
+        answers: [],
+        status: "open",
+      };
 
-      if (isQuestionMode) {
-        // 이미지 업로드가 있으면 먼저 업로드
-        let uploadedImageUrl: string | undefined;
-        if (questionImage) {
-          // questionImage는 현재 Blob URL이므로 실제 파일을 다시 가져와야 함
-          // 실제 구현에서는 파일을 state로 관리하는 것이 좋음
-          // 여기서는 간단히 처리
-        }
+      setMessages((prev) => [...prev, newMessage]);
+      addSystemMessage(
+        `${user?.username}님이 질문했습니다: "${messageInput.slice(0, 30)}..."`
+      );
 
-        // 질문 메시지 전송
-        webSocketService.sendMessage({
-          type: "QUESTION",
-          roomType: "OPEN",
-          roomId: roomIdNum,
-          message: messageInput,
-        });
+      // 리셋
+      setMessageInput("");
+      setIsQuestionMode(false);
+      setQuestionImage(null);
+      setQuestionFileName(null);
 
-        setMessageInput("");
-        setIsQuestionMode(false);
-        setQuestionImage(null);
-        setQuestionFileName(null);
-
-        toast({
-          title: "질문 등록",
-          description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
-        });
-      } else {
-        // 일반 텍스트 메시지 전송
-        webSocketService.sendMessage({
-          type: "TALK",
-          roomType: "OPEN",
-          roomId: roomIdNum,
-          message: messageInput,
-        });
-
-        setMessageInput("");
-      }
-    } catch (error: any) {
-      console.error("Failed to send message:", error);
       toast({
-        title: "전송 실패",
-        description: error?.message || "메시지 전송에 실패했습니다.",
-        variant: "destructive",
+        title: "질문 등록",
+        description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
       });
+    } else {
+      // 일반 텍스트 메시지 전송
+      const newMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "text",
+        sender: user?.username || "익명",
+        content: messageInput,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
+      setMessageInput("");
     }
   };
 
   const addSystemMessage = (content: string) => {
     const newMessage: ChatMessage = {
-      id: Date.now(),
-      type: "SYSTEM",
-      sender: "SYSTEM",
+      id: Date.now().toString(),
+      type: "system",
       content,
       timestamp: new Date(),
     };
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  // ✅ 이미지 업로드
-const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  if (file.size > 10 * 1024 * 1024) {
-    toast({
-      title: "오류",
-      description: "이미지 크기는 10MB를 초과할 수 없습니다.",
-      variant: "destructive",
-    });
-    return;
-  }
-
-  if (isQuestionMode) {
-    const imageUrl = URL.createObjectURL(file);
-    setQuestionImage(imageUrl);
-    setQuestionFileName(file.name);
-  } else {
-    try {
-      const imageUrl = await chatAPI.uploadImage(file);  // ✅ string 직접 반환
-      
-      if (roomId) {
-        const roomIdNum = parseInt(roomId, 10);
-        webSocketService.sendMessage({
-          type: "TALK",
-          roomType: "OPEN",
-          roomId: roomIdNum,
-          message: imageUrl,  // ✅ URL 직접 사용
-        });
-      }
-
+    if (file.size > 10 * 1024 * 1024) {
       toast({
-        title: "이미지 전송 완료",
-        description: "이미지가 전송되었습니다.",
-      });
-    } catch (error: any) {
-      console.error("Failed to upload image:", error);
-      toast({
-        title: "업로드 실패",
-        description: error?.message || "이미지 업로드에 실패했습니다.",
+        title: "오류",
+        description: "이미지 크기는 10MB를 초과할 수 없습니다.",
         variant: "destructive",
       });
+      return;
     }
-  }
-};
+
+    const imageUrl = URL.createObjectURL(file);
+
+    if (isQuestionMode) {
+      // 질문 모드일 때는 첨부파일로 저장
+      setQuestionImage(imageUrl);
+      setQuestionFileName(file.name);
+    } else {
+      // 일반 모드일 때는 바로 이미지 메시지 전송
+      const newMessage: ChatMessage = {
+        id: Date.now().toString(),
+        type: "image",
+        sender: user?.username || "익명",
+        content: "",
+        imageUrl,
+        timestamp: new Date(),
+      };
+
+      setMessages((prev) => [...prev, newMessage]);
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -754,75 +558,63 @@ const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       return;
     }
 
-    // TODO: 파일 업로드 API 구현 필요
-    toast({
-      title: "준비중",
-      description: "파일 업로드 기능은 준비중입니다.",
-    });
+    const newMessage: ChatMessage = {
+      id: Date.now().toString(),
+      type: "file",
+      sender: user?.username || "익명",
+      content: "",
+      fileName: file.name,
+      fileSize: file.size,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, newMessage]);
   };
 
-// ✅ 답변 제출 (WebSocket 사용)
-const handleSubmitAnswer = (questionId: number) => {
-  console.log("🔍 handleSubmitAnswer called with questionId:", questionId);
-  console.log("🔍 questionId type:", typeof questionId);
-  
-  const answerText = answerInputs[questionId];
-  console.log("🔍 answerText:", answerText);
-  console.log("🔍 answerInputs:", answerInputs);
-  
-  if (!answerText?.trim() || !roomId) {
-    console.log("❌ Validation failed:", { answerText, roomId });
-    return;
-  }
+  // 질문에 답변 추가
+  const handleSubmitAnswer = (questionId: string) => {
+    const answerText = answerInputs[questionId];
+    if (!answerText?.trim()) return;
 
-  try {
-    const roomIdNum = parseInt(roomId, 10);
+    const newAnswer: HelpAnswer = {
+      id: Date.now().toString(),
+      answerer: user?.username || "익명",
+      content: answerText,
+      timestamp: new Date(),
+    };
 
-    console.log("📤 Sending ANSWER with refId:", questionId);
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === questionId && msg.type === "question"
+          ? {
+              ...msg,
+              answers: [...(msg.answers || []), newAnswer],
+              status: "helping" as const,
+            }
+          : msg
+      )
+    );
 
-    webSocketService.sendMessage({
-      type: "ANSWER",
-      roomType: "OPEN",
-      roomId: roomIdNum,
-      message: answerText,
-      refId: questionId,
-    });
-
+    // 답변 입력 초기화
     setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
 
     toast({
       title: "답변 등록",
       description: "답변이 등록되었습니다!",
     });
-  } catch (error: any) {
-    console.error("Failed to submit answer:", error);
-    toast({
-      title: "전송 실패",
-      description: error?.message || "답변 전송에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+  };
 
-// ✅ 답변 채택 (REST API 사용)
-const handleAcceptAnswer = async (questionId: number, answerId: number) => {
-  try {
-    console.log("👑 Accepting answer:", { questionId, answerId });
-
-    // ✅ REST API 호출
-    await chatAPI.solveQuestion(questionId, answerId);
-
-    // ✅ 로컬 상태 즉시 업데이트 (서버에서도 SOLVE 메시지 보내지만 UI 즉시 반영)
+  // 답변 채택
+  const handleAcceptAnswer = (questionId: string, answerId: string) => {
     setMessages((prev) =>
       prev.map((msg) =>
-        msg.id === questionId && msg.type === "QUESTION"
+        msg.id === questionId && msg.type === "question"
           ? {
               ...msg,
               answers: msg.answers?.map((ans) =>
                 ans.id === answerId ? { ...ans, isAccepted: true } : ans
               ),
               status: "resolved" as const,
-              isSolved: true,
             }
           : msg
       )
@@ -832,24 +624,18 @@ const handleAcceptAnswer = async (questionId: number, answerId: number) => {
       title: "답변 채택 완료",
       description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
     });
-  } catch (error: any) {
-    console.error("Failed to accept answer:", error);
-    toast({
-      title: "채택 실패",
-      description: error?.message || "답변 채택에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+  };
 
   // 질문으로 스크롤
-  const scrollToQuestion = (questionId: number) => {
+  const scrollToQuestion = (questionId: string) => {
     setQuestionListOpen(false);
-
+    
+    // 약간의 지연을 두고 스크롤 (팝오버가 닫히는 시간 확보)
     setTimeout(() => {
       const element = document.getElementById(`question-${questionId}`);
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
+        // 하이라이트 효과
         element.classList.add("ring-4", "ring-red-300", "ring-opacity-50");
         setTimeout(() => {
           element.classList.remove("ring-4", "ring-red-300", "ring-opacity-50");
@@ -858,28 +644,15 @@ const handleAcceptAnswer = async (questionId: number, answerId: number) => {
     }, 100);
   };
 
-// ✅ 질문 삭제 (REST API 사용)
-const handleDeleteQuestion = async (questionId: number) => {
-  try {
-    console.log("🗑️ Deleting question:", questionId);
-    
-    await chatAPI.deleteMessage(questionId);
-
+  // 질문 삭제
+  const handleDeleteQuestion = (questionId: string) => {
     setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
 
     toast({
       title: "삭제 완료",
       description: "질문이 삭제되었습니다.",
     });
-  } catch (error: any) {
-    console.error("Failed to delete question:", error);
-    toast({
-      title: "삭제 실패",
-      description: error?.message || "질문 삭제에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+  };
 
   const handleCopyInviteLink = () => {
     const inviteLink = `${window.location.origin}/#/open-study/room/${roomId}`;
@@ -909,19 +682,21 @@ const handleDeleteQuestion = async (questionId: number) => {
       }
     }
 
-    // ✅ 스터디 세션 종료
+    // ✅ 스터디 세션 종료 연동
     if (sessionId !== null) {
       try {
         const endResult = await sessionAPI.endSession(sessionId);
         console.log("Session ended successfully:", endResult);
-
+        
+        // 레벨업 확인 및 축하 메시지
         if (endResult.leveledUp && endResult.newLevel !== null) {
           toast({
             title: "🎉 레벨업!",
             description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
           });
         }
-
+        
+        // setInterval 정리 및 currentSeconds 초기화
         if (intervalRef.current) {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
@@ -931,18 +706,11 @@ const handleDeleteQuestion = async (questionId: number) => {
         setIsSessionActive(false);
       } catch (sessionError: any) {
         console.error("Failed to end session:", sessionError);
+        // 세션 종료 실패해도 방 나가기는 계속 진행
       }
     }
 
-    // WebSocket 연결 해제
-    if (roomId) {
-      const roomIdNum = parseInt(roomId, 10);
-      if (!isNaN(roomIdNum)) {
-        webSocketService.unsubscribe(roomIdNum, "OPEN");
-      }
-    }
-    webSocketService.disconnect();
-
+    // ✅ 방장이든 아니든 leaveRoom 호출 (백엔드에서 방장이면 방 자동 삭제)
     await leaveRoom();
     toast({
       title: isCreator ? "방 삭제 완료" : "방 나가기 완료",
@@ -1079,7 +847,7 @@ const handleDeleteQuestion = async (questionId: number) => {
 
       {/* 메인 컨텐츠 */}
       <div className="flex-1 flex overflow-hidden">
-        {/* 왼쪽: 채팅 */}
+        {/* 왼쪽: 채팅 (전체 너비) */}
         <div className="flex-1 flex flex-col">
           {/* 상태 전환 + 타이머 */}
           <div className="border-b bg-white p-4">
@@ -1144,6 +912,7 @@ const handleDeleteQuestion = async (questionId: number) => {
               </div>
 
               <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
+                {/* 레벨 정보 표시 */}
                 {levelInfo && (
                   <div className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-indigo-50 to-sky-50 rounded-lg border border-indigo-200">
                     <span className="font-semibold text-indigo-700">
@@ -1154,13 +923,14 @@ const handleDeleteQuestion = async (questionId: number) => {
                     </span>
                   </div>
                 )}
-                {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length > 0 && (
+                {/* 질문 개수 표시 - 팝오버로 변경 */}
+                {messages.filter(m => m.type === "question" && m.status !== "resolved").length > 0 && (
                   <Popover open={questionListOpen} onOpenChange={setQuestionListOpen}>
                     <PopoverTrigger asChild>
                       <button className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-red-50 to-orange-50 rounded-lg border border-red-200 hover:shadow-md transition-all cursor-pointer">
                         <HelpCircle className="w-4 h-4 text-red-500" />
                         <span className="font-semibold text-red-700">
-                          질문 {messages.filter(m => m.type === "QUESTION" && m.status !== "resolved").length}개
+                          질문 {messages.filter(m => m.type === "question" && m.status !== "resolved").length}개
                         </span>
                       </button>
                     </PopoverTrigger>
@@ -1172,7 +942,7 @@ const handleDeleteQuestion = async (questionId: number) => {
                         </h4>
                         <div className="space-y-2">
                           {messages
-                            .filter(m => m.type === "QUESTION" && m.status !== "resolved")
+                            .filter(m => m.type === "question" && m.status !== "resolved")
                             .map((question) => (
                               <div
                                 key={question.id}
@@ -1236,11 +1006,12 @@ const handleDeleteQuestion = async (questionId: number) => {
             )}
             {messages.map((message) => (
               <div key={message.id}>
-                {message.type === "SYSTEM" ? (
+                {message.type === "system" ? (
                   <div className="text-center text-sm text-gray-500 py-2">
                     {message.content}
                   </div>
-                ) : message.type === "QUESTION" ? (
+                ) : message.type === "question" ? (
+                  // 질문 메시지
                   <div 
                     id={`question-${message.id}`}
                     className="bg-gradient-to-r from-red-50 to-orange-50 rounded-lg p-4 border-l-4 border-red-500 space-y-3 transition-all"
@@ -1248,9 +1019,6 @@ const handleDeleteQuestion = async (questionId: number) => {
                     <div className="flex items-start justify-between">
                       <div className="flex items-center space-x-2">
                         <Avatar className="w-8 h-8">
-                          {message.senderProfileImage ? (
-                            <AvatarImage src={message.senderProfileImage} />
-                          ) : null}
                           <AvatarFallback className="bg-red-500 text-white">
                             {message.sender?.charAt(0).toUpperCase()}
                           </AvatarFallback>
@@ -1278,22 +1046,26 @@ const handleDeleteQuestion = async (questionId: number) => {
                             </Badge>
                           </div>
                           <span className="text-xs text-gray-500">
-                            {formatRelativeTime(message.timestamp)}
+                            {message.timestamp.toLocaleTimeString("ko-KR", {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
                           </span>
                         </div>
                       </div>
-{message.sender === user?.username && (
-  <Button
-    variant="ghost"
-    size="sm"
-    className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-    onClick={() => handleDeleteQuestion(message.id)}
-  >
-    <X className="w-4 h-4" />
-  </Button>
-)}
+                      {message.sender === user?.username && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDeleteQuestion(message.id)}
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
 
+                    {/* 질문 내용 */}
                     <div className="bg-white rounded-lg p-3 shadow-sm">
                       <div className="flex items-start gap-2">
                         <HelpCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
@@ -1301,6 +1073,7 @@ const handleDeleteQuestion = async (questionId: number) => {
                       </div>
                     </div>
 
+                    {/* 첨부 이미지 */}
                     {message.imageUrl && (
                       <div className="bg-white rounded-lg p-2">
                         <img
@@ -1312,6 +1085,7 @@ const handleDeleteQuestion = async (questionId: number) => {
                       </div>
                     )}
 
+                    {/* 채택된 답변 (해결된 경우) */}
                     {message.status === "resolved" && message.answers && message.answers.some(ans => ans.isAccepted) && (
                       <div className="pl-7 space-y-2">
                         <div className="flex items-center gap-2 text-sm font-medium text-green-700">
@@ -1325,9 +1099,6 @@ const handleDeleteQuestion = async (questionId: number) => {
                           >
                             <div className="flex items-center gap-2 mb-2">
                               <Avatar className="w-6 h-6">
-                                {answer.answererProfileImage ? (
-                                  <AvatarImage src={answer.answererProfileImage} />
-                                ) : null}
                                 <AvatarFallback className="bg-green-500 text-white text-xs">
                                   {answer.answerer.charAt(0).toUpperCase()}
                                 </AvatarFallback>
@@ -1350,6 +1121,7 @@ const handleDeleteQuestion = async (questionId: number) => {
                       </div>
                     )}
 
+                    {/* 답변 목록 (해결되지 않은 경우) */}
                     {message.status !== "resolved" && message.answers && message.answers.length > 0 && (
                       <div className="space-y-2 pl-7">
                         <div className="flex items-center gap-2 text-sm font-medium text-gray-700">
@@ -1364,9 +1136,6 @@ const handleDeleteQuestion = async (questionId: number) => {
                             <div className="flex items-start justify-between gap-2 mb-2">
                               <div className="flex items-center gap-2">
                                 <Avatar className="w-6 h-6">
-                                  {answer.answererProfileImage ? (
-                                    <AvatarImage src={answer.answererProfileImage} />
-                                  ) : null}
                                   <AvatarFallback className="bg-blue-500 text-white text-xs">
                                     {answer.answerer.charAt(0).toUpperCase()}
                                   </AvatarFallback>
@@ -1378,17 +1147,18 @@ const handleDeleteQuestion = async (questionId: number) => {
                                   {formatRelativeTime(answer.timestamp)}
                                 </span>
                               </div>
-{message.sender === user?.username && (
-  <Button
-    variant="ghost"
-    size="sm"
-    className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
-    onClick={() => handleAcceptAnswer(message.id, answer.id)}
-  >
-    <CheckCircle className="w-4 h-4 mr-1" />
-    채택
-  </Button>
-)}
+                              {/* 질문 작성자만 채택 버튼 표시 */}
+                              {message.sender === user?.username && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  onClick={() => handleAcceptAnswer(message.id, answer.id)}
+                                >
+                                  <CheckCircle className="w-4 h-4 mr-1" />
+                                  채택
+                                </Button>
+                              )}
                             </div>
                             <p className="text-sm text-gray-800 pl-8">
                               {answer.content}
@@ -1398,6 +1168,7 @@ const handleDeleteQuestion = async (questionId: number) => {
                       </div>
                     )}
 
+                    {/* 답변 입력 (해결되지 않은 경우만) */}
                     {message.status !== "resolved" && (
                       <div className="pl-7 flex gap-2">
                         <Input
@@ -1414,25 +1185,20 @@ const handleDeleteQuestion = async (questionId: number) => {
                           }
                           className="flex-1 bg-white"
                         />
-<Button
-  size="sm"
-  onClick={() => {
-    console.log("🔘 Button clicked, message.id:", message.id, "type:", typeof message.id);
-    handleSubmitAnswer(message.id);
-  }}
-  disabled={!answerInputs[message.id]?.trim()}
->
-  <Send className="w-4 h-4" />
-</Button>
+                        <Button
+                          size="sm"
+                          onClick={() => handleSubmitAnswer(message.id)}
+                          disabled={!answerInputs[message.id]?.trim()}
+                        >
+                          <Send className="w-4 h-4" />
+                        </Button>
                       </div>
                     )}
                   </div>
                 ) : (
+                  // 일반 메시지
                   <div className="flex items-start space-x-3">
                     <Avatar className="w-8 h-8">
-                      {message.senderProfileImage ? (
-                        <AvatarImage src={message.senderProfileImage} />
-                      ) : null}
                       <AvatarFallback>
                         {message.sender?.charAt(0).toUpperCase()}
                       </AvatarFallback>
@@ -1443,22 +1209,53 @@ const handleDeleteQuestion = async (questionId: number) => {
                           {message.sender}
                         </span>
                         <span className="text-xs text-gray-500">
-                          {formatRelativeTime(message.timestamp)}
+                          {message.timestamp.toLocaleTimeString("ko-KR", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
                         </span>
                       </div>
 
-                      <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
-                        {message.imageUrl ? (
+                      {message.type === "text" && (
+                        <div className="bg-white rounded-lg px-4 py-2 shadow-sm">
+                          <p className="text-gray-900">{message.content}</p>
+                        </div>
+                      )}
+
+                      {message.type === "image" && (
+                        <div className="bg-white rounded-lg p-2 shadow-sm">
                           <img
                             src={message.imageUrl}
                             alt="uploaded"
                             className="max-w-xs rounded cursor-pointer hover:opacity-90"
                             onClick={() => window.open(message.imageUrl)}
                           />
-                        ) : (
-                          <p className="text-gray-900">{message.content}</p>
-                        )}
-                      </div>
+                        </div>
+                      )}
+
+                      {message.type === "file" && (
+                        <div className="bg-white rounded-lg px-4 py-3 shadow-sm flex items-center justify-between max-w-md">
+                          <div className="flex items-center space-x-3">
+                            <Paperclip className="w-5 h-5 text-gray-400" />
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">
+                                {message.fileName}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {(
+                                  (message.fileSize || 0) /
+                                  1024 /
+                                  1024
+                                ).toFixed(2)}{" "}
+                                MB
+                              </p>
+                            </div>
+                          </div>
+                          <Button variant="ghost" size="sm">
+                            <Download className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1469,6 +1266,7 @@ const handleDeleteQuestion = async (questionId: number) => {
 
           {/* 채팅 입력 */}
           <div className="border-t bg-white p-4">
+            {/* 질문 모드 표시 */}
             {isQuestionMode && (
               <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
                 <div className="flex items-center gap-2">
