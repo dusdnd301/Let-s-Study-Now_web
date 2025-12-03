@@ -29,6 +29,8 @@ import {
   TimerStatus,
   TimerMode,
   LevelInfoDto,
+  SessionStartRequestDto,
+  SessionEndResultDto,
 } from "@/lib/api";
 import {
   Clock,
@@ -99,7 +101,16 @@ const GroupStudyRoomPage: React.FC = () => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [messageInput, setMessageInput] = useState("");
 
-  // ✅ 타이머 상태 (백엔드 연동)
+  // My Status
+  const [myStatus, setMyStatus] = useState<"studying" | "resting">("studying");
+
+  // Session - 백엔드 연동
+  const [sessionId, setSessionId] = useState<number | null>(null);
+  const [isSessionActive, setIsSessionActive] = useState(false);
+  const [currentSeconds, setCurrentSeconds] = useState(0);
+  const intervalRef = useRef<any>(null);
+
+  // ✅ 타이머 상태 (백엔드 연동) - 기존 timerAPI용 (필요시 유지)
   const [timerStatus, setTimerStatus] = useState<TimerStatusResponse | null>(
     null
   );
@@ -225,7 +236,32 @@ const GroupStudyRoomPage: React.FC = () => {
     }
   }, [user]);
 
-  // ✅ 타이머 상태 폴링 (1초마다)
+  // 타이머 실시간 UI 업데이트 - myStatus에 따라 작동
+  useEffect(() => {
+    // 기존 interval 정리
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    // ✅ "공부중" 상태일 때만 타이머 시작
+    if (myStatus === "studying") {
+      // ✅ 함수형 업데이트를 사용하여 항상 최신 상태를 참조
+      intervalRef.current = setInterval(() => {
+        setCurrentSeconds((prevSeconds) => prevSeconds + 1);
+      }, 1000);
+    }
+
+    // 메모리 누수 방지를 위한 클린업
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [myStatus]);
+
+  // ✅ 타이머 상태 폴링 (1초마다) - 기존 timerAPI용 (필요시 유지)
   useEffect(() => {
     if (!user || !roomId || !hasJoinedRef.current) return;
 
@@ -311,7 +347,37 @@ const GroupStudyRoomPage: React.FC = () => {
 
         hasJoinedRef.current = true;
 
-        // 3. ✅ 타이머 시작 (에러가 나도 계속 진행)
+        // 3. ✅ 스터디 세션 시작 연동
+        try {
+          const roomIdNum = parseInt(roomId, 10);
+          if (!isNaN(roomIdNum)) {
+            console.log("Calling sessionAPI.startSession with:", { studyType: 'GROUP_STUDY', roomId: roomIdNum });
+            const sessionResponse = await sessionAPI.startSession({
+              studyType: 'GROUP_STUDY',
+              roomId: roomIdNum
+            });
+            console.log("Session API response:", sessionResponse);
+            
+            setSessionId(sessionResponse.sessionId);
+            setIsSessionActive(true);
+            setCurrentSeconds(0);
+            console.log("Session state updated:", {
+              sessionId: sessionResponse.sessionId,
+              isSessionActive: true
+            });
+          } else {
+            console.error("Invalid roomId:", roomId);
+          }
+        } catch (sessionError: any) {
+          console.error("Failed to start session:", sessionError);
+          console.error("Session error details:", {
+            message: sessionError?.message,
+            stack: sessionError?.stack
+          });
+          // 세션 시작 실패해도 방 입장은 계속 진행
+        }
+
+        // 4. ✅ 기존 타이머 시작 (에러가 나도 계속 진행) - 필요시 유지
         try {
           const isCreator = roomData.creatorId === Number(user.id);
           const timerResponse = await timerAPI.startTimer(
@@ -370,7 +436,17 @@ const GroupStudyRoomPage: React.FC = () => {
         const baseURL =
           import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
-        // ✅ 타이머 종료
+        // ✅ 스터디 세션 종료
+        if (sessionId !== null) {
+          fetch(`${baseURL}/api/study-sessions/${sessionId}/end`, {
+            method: "POST",
+            credentials: "include",
+            keepalive: true,
+            headers: { "Content-Type": "application/json" },
+          }).catch((err) => console.error("Failed to end session:", err));
+        }
+
+        // ✅ 타이머 종료 (기존 timerAPI용)
         fetch(`${baseURL}/api/timer/end`, {
           method: "POST",
           credentials: "include",
@@ -405,7 +481,35 @@ const GroupStudyRoomPage: React.FC = () => {
     isLeavingRef.current = true;
 
     try {
-      // ✅ 타이머 종료
+      // ✅ 스터디 세션 종료 연동
+      if (sessionId !== null) {
+        try {
+          const endResult = await sessionAPI.endSession(sessionId);
+          console.log("Session ended successfully:", endResult);
+          
+          // 레벨업 확인 및 축하 메시지
+          if (endResult.leveledUp && endResult.newLevel !== null) {
+            toast({
+              title: "🎉 레벨업!",
+              description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
+            });
+          }
+          
+          // setInterval 정리 및 currentSeconds 초기화
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+          }
+          setCurrentSeconds(0);
+          setSessionId(null);
+          setIsSessionActive(false);
+        } catch (sessionError: any) {
+          console.error("Failed to end session:", sessionError);
+          // 세션 종료 실패해도 방 나가기는 계속 진행
+        }
+      }
+
+      // ✅ 기존 타이머 종료 (필요시 유지)
       try {
         await timerAPI.endTimer();
         console.log("Timer ended successfully");
@@ -422,42 +526,32 @@ const GroupStudyRoomPage: React.FC = () => {
   };
 
   // ✅ 상태 전환 (공부/휴식)
-  const handleStatusToggle = async () => {
-    if (!timerStatus) return;
+  const handleStatusToggle = (newStatus: "studying" | "resting") => {
+    if (myStatus === newStatus) return;
 
-    try {
-      // ✅ api.ts의 TimerMode 타입 사용: "STUDY" | "REST"
-      const newMode: TimerMode =
-        timerStatus.timerMode === "STUDY" ? "REST" : "STUDY";
-
-      // 백엔드 API 호출 (구현 필요)
-      // const newTimerStatus = await timerAPI.toggleStatus();
-      // setTimerStatus(newTimerStatus);
-
-      // 임시: 로컬 상태만 업데이트
-      const updatedStatus: TimerStatusResponse = {
-        ...timerStatus,
-        timerMode: newMode,
-      };
-      setTimerStatus(updatedStatus);
-
-      const modeText = newMode === "STUDY" ? "공부" : "휴식";
-
+    if (newStatus === "resting" && myStatus === "studying") {
       addSystemMessage(
-        `${user?.username}님이 ${modeText} 모드로 전환했습니다.`
+        `${
+          user?.username
+        }님이 휴식 모드로 전환했습니다. (공부 시간: ${formatTime(
+          currentSeconds
+        )})`
       );
-
-      toast({
-        title: `${modeText} 모드`,
-        description: `${modeText} 모드로 전환되었습니다.`,
-      });
-    } catch (error: any) {
-      toast({
-        title: "오류",
-        description: error?.message || "상태 전환에 실패했습니다.",
-        variant: "destructive",
-      });
+    } else if (newStatus === "studying" && myStatus === "resting") {
+      addSystemMessage(`${user?.username}님이 공부 모드로 전환했습니다.`);
     }
+
+    setMyStatus(newStatus);
+    setParticipants((prev) =>
+      prev.map((p) =>
+        p.username === user?.username
+          ? {
+              ...p,
+              timerStatus: newStatus === "studying" ? "STUDYING" : "RESTING",
+            }
+          : p
+      )
+    );
   };
 
   const handleSendMessage = () => {
@@ -646,11 +740,18 @@ const GroupStudyRoomPage: React.FC = () => {
     navigate("/group-study");
   };
 
-  // 시간 포맷 (초 → mm:ss)
+  // 시간 포맷 함수
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
     const secs = seconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, "0")}:${secs
+        .toString()
+        .padStart(2, "0")}`;
+    }
+    return `${minutes.toString().padStart(2, "0")}:${secs
       .toString()
       .padStart(2, "0")}`;
   };
@@ -850,68 +951,68 @@ const GroupStudyRoomPage: React.FC = () => {
           <div className="border-b bg-white p-4">
             <div className="flex items-center gap-4">
               <Button
-                variant={
-                  timerStatus?.timerMode === "STUDY" ? "default" : "outline"
-                }
+                variant={myStatus === "studying" ? "default" : "outline"}
                 className={
-                  timerStatus?.timerMode === "STUDY"
+                  myStatus === "studying"
                     ? "bg-green-500 hover:bg-green-600"
                     : ""
                 }
-                onClick={handleStatusToggle}
-                disabled={!timerStatus || timerStatus.timerStatus !== "RUNNING"}
+                onClick={() => handleStatusToggle("studying")}
               >
                 <BookOpen className="w-4 h-4 mr-2" />
                 공부중
               </Button>
               <Button
-                variant={
-                  timerStatus?.timerMode === "REST" ? "default" : "outline"
-                }
+                variant={myStatus === "resting" ? "default" : "outline"}
                 className={
-                  timerStatus?.timerMode === "REST"
+                  myStatus === "resting"
                     ? "bg-orange-500 hover:bg-orange-600"
                     : ""
                 }
-                onClick={handleStatusToggle}
-                disabled={!timerStatus || timerStatus.timerStatus !== "RUNNING"}
+                onClick={() => handleStatusToggle("resting")}
               >
                 <Coffee className="w-4 h-4 mr-2" />
                 휴식중
               </Button>
 
-              {/* ✅ 백엔드에서 받은 타이머 정보 */}
               <div className="flex items-center gap-3 ml-4 px-4 py-2 bg-gray-100 rounded-lg">
                 <Clock className="w-5 h-5 text-gray-600" />
                 <div className="flex items-center gap-2">
                   <span
                     className={`text-2xl font-bold tabular-nums ${
-                      timerStatus?.timerMode === "STUDY"
+                      myStatus === "studying"
                         ? "text-green-600"
-                        : "text-orange-400"
+                        : "text-gray-400"
                     }`}
                   >
-                    {timerStatus
-                      ? formatTime(timerStatus.currentSessionSeconds)
-                      : "00:00"}
+                    {formatTime(currentSeconds)}
                   </span>
-                  {timerStatus?.timerStatus === "RUNNING" ? (
+                  {myStatus === "studying" ? (
                     <span className="flex items-center text-xs text-green-600">
                       <Play className="w-3 h-3 mr-1" />
                       진행중
                     </span>
-                  ) : timerStatus?.timerStatus === "PAUSED" ? (
+                  ) : (
                     <span className="flex items-center text-xs text-orange-500">
                       <Pause className="w-3 h-3 mr-1" />
                       일시정지
                     </span>
-                  ) : (
-                    <span className="flex items-center text-xs text-gray-500">
-                      <Pause className="w-3 h-3 mr-1" />
-                      정지
-                    </span>
                   )}
                 </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setCurrentSeconds(0);
+                    toast({
+                      title: "타이머 리셋",
+                      description: "타이머가 00:00으로 초기화되었습니다.",
+                    });
+                  }}
+                  className="text-gray-500 hover:text-gray-700"
+                >
+                  리셋
+                </Button>
               </div>
 
               {/* ✅ 총 학습 시간 + 레벨 + 질문 개수 */}
@@ -1018,9 +1119,7 @@ const GroupStudyRoomPage: React.FC = () => {
                 )}
                 <div className="flex items-center gap-1">
                   <TrendingUp className="w-4 h-4 text-green-500" />
-                  <span>
-                    총 학습: {timerStatus?.totalStudyTime || "0:00:00"}
-                  </span>
+                  <span>총 {formatTime(currentSeconds)}</span>
                 </div>
               </div>
             </div>
