@@ -4,6 +4,22 @@
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
+// ✅ 토큰 관리 유틸리티 (export 필수!)
+export const tokenManager = {
+  setToken: (token: string) => {
+    localStorage.setItem("authToken", token);
+  },
+  getToken: (): string | null => {
+    return localStorage.getItem("authToken");
+  },
+  removeToken: () => {
+    localStorage.removeItem("authToken");
+  },
+  hasToken: (): boolean => {
+    return !!localStorage.getItem("authToken");
+  },
+};
+
 // ✅ 공통 API 클라이언트
 class ApiClient {
   private baseURL: string;
@@ -21,11 +37,16 @@ class ApiClient {
     // ✅ FormData면 Content-Type 자동 설정 안 함 (브라우저가 boundary 붙임)
     const isFormData = options.body instanceof FormData;
 
+    // ✅ 토큰 헤더 추가
+    const token = tokenManager.getToken();
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
     const config: RequestInit = {
       headers: isFormData
-        ? options.headers
+        ? { ...authHeaders, ...options.headers }
         : {
             "Content-Type": "application/json",
+            ...authHeaders,
             ...options.headers,
           },
       credentials: "include", // ✅ 쿠키 자동 전송 (세션 기반 인증 필수)
@@ -52,6 +73,7 @@ class ApiClient {
         // 인증 실패 시 로그인 페이지로 리다이렉트
         if (response.status === 401) {
           console.warn("세션이 만료되었습니다. 다시 로그인하세요.");
+          tokenManager.removeToken(); // 토큰 삭제
 
           // ✅ 공개 페이지에서는 리다이렉트하지 않음
           const publicPaths = ["/", "/login", "/register"];
@@ -74,6 +96,7 @@ class ApiClient {
         return (await response.json()) as T;
       }
 
+      // ✅ 텍스트 응답 (토큰 문자열 등)
       return response.text() as unknown as T;
     } catch (error) {
       console.error("API request failed:", error);
@@ -123,7 +146,7 @@ export const apiClient = new ApiClient(API_BASE_URL);
 // ✅ 타입 정의
 //
 export interface User {
-  id?: string;
+  id?: number; // ✅ string에서 number로 변경
   email: string;
   username: string;
   level?: number;
@@ -152,12 +175,39 @@ export interface RegisterRequest {
   checkPw: boolean;
 }
 
+// ✅ 채팅 메시지 타입
+export type MessageType = "TALK" | "QUESTION" | "ANSWER" | "SOLVE" | "SYSTEM";
+export type RoomType = "OPEN" | "GROUP";
+
+export interface ChatMessage {
+  id: number;  // ✅ Swagger: id
+  type: MessageType;
+  roomType: RoomType;
+  roomId: number;
+  sender: string;
+  message: string;
+  refId?: number;
+  isSolved?: boolean;
+  isSelected?: boolean;  // ✅ Swagger에 있음
+  sentAt: string;  // ✅ Swagger: sentAt
+  imageUrl?: string;
+}
+
+// ✅ 채팅 메시지 전송 요청
+export interface SendChatMessageRequest {
+  type: MessageType;
+  roomType: RoomType;
+  roomId: number;
+  message: string;
+  refId?: number; // 답변일 경우 필수
+}
+
 // ✅ 오픈 스터디룸 참여자 타입 (백엔드 ParticipantResponseDto와 일치)
 export interface OpenStudyParticipant {
   memberId: number;
   nickname: string;
   profileImage?: string;
-  timerStatus: 'STUDYING' | 'RESTING'; // ✅ PersonalTimer가 없으면 기본값 RESTING 반환
+  timerStatus: "STUDYING" | "RESTING"; // ✅ PersonalTimer가 없으면 기본값 RESTING 반환
 }
 
 // ✅ 오픈 스터디룸 타입 (백엔드 스키마 기준)
@@ -173,7 +223,7 @@ export interface OpenStudyRoom {
   creatorUsername: string;
   createdAt?: string;
   isActive?: boolean;
-  createdBy?: string;
+  createdBy?: number; // ✅ string에서 number로 변경
   participants?: OpenStudyParticipant[]; // ✅ 참여자 목록
 }
 
@@ -295,7 +345,14 @@ export interface SessionResponseDto {
 
 // 🔐 인증 관련
 export const authAPI = {
-  login: (data: LoginRequest) => apiClient.post<User>("/api/loginAct", data),
+  // ✅ 로그인 - 토큰 문자열 반환
+  login: async (data: LoginRequest): Promise<string> => {
+    const token = await apiClient.post<string>("/api/loginAct", data);
+    // ✅ 토큰 저장
+    tokenManager.setToken(token);
+    return token;
+  },
+
   register: (data: RegisterRequest) => {
     if (data.profileImageFile && data.profileImageFile instanceof File) {
       const formData = new FormData();
@@ -310,8 +367,15 @@ export const authAPI = {
       return apiClient.post<{ message: string }>("/api/registerAct", jsonData);
     }
   },
+
   getProfile: () => apiClient.get<User>("/api/profile"),
-  logout: () => apiClient.post<{ message: string }>("/api/logout"),
+
+  logout: async () => {
+    const result = await apiClient.post<{ message: string }>("/api/logout");
+    // ✅ 로그아웃 시 토큰 삭제
+    tokenManager.removeToken();
+    return result;
+  },
 
   updateProfile: (data: FormData) => {
     // ✅ PATCH 메서드 사용, FormData 직접 전송
@@ -326,6 +390,34 @@ export const authAPI = {
 
   deleteAccount: (password: string) =>
     apiClient.delete<{ message: string }>("/api/delete/account", { password }),
+};
+
+// 💬 채팅 관련 API
+export const chatAPI = {
+  // ✅ 채팅 내역 조회 - 배열로 반환
+  getChatHistory: (roomId: number, roomType: RoomType = "OPEN", page: number = 0, size: number = 20) =>
+    apiClient.get<ChatMessage[]>(
+      `/api/chat/room/${roomId}?roomType=${roomType}&page=${page}&size=${size}`
+    ),
+
+  // ✅ 메시지 삭제 - string 반환
+  deleteMessage: (messageId: number) =>
+    apiClient.delete<string>(`/api/chat/message/${messageId}`),
+
+  // ✅ 이미지 업로드 - string(URL) 반환
+  uploadImage: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return apiClient.post<string>("/api/chat/image", formData);
+  },
+
+  // ✅ 질문 해결 처리 (답변 채택 포함) - string 반환
+  solveQuestion: (questionId: number, answerId?: number) => {
+    const url = answerId
+      ? `/api/chat/message/${questionId}/solve?answerId=${answerId}`
+      : `/api/chat/message/${questionId}/solve`;
+    return apiClient.patch<string>(url);
+  },
 };
 
 // 👥 그룹 관련
