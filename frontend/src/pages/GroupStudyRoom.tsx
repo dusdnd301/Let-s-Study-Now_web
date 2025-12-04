@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Slider } from "@/components/ui/slider";
 import {
   Dialog,
   DialogContent,
@@ -47,6 +48,9 @@ import {
   Image as ImageIcon,
   Users,
   Copy,
+  Music,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 
 interface HelpAnswer {
@@ -123,6 +127,16 @@ const GroupStudyRoomPage: React.FC = () => {
   const [questionListOpen, setQuestionListOpen] = useState(false);
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
+
+  // Audio (백색소음 & 분위기 음악 & 자연음악)
+  const [audioType, setAudioType] = useState<"none" | "whiteNoise" | "ambient" | "nature">("none");
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.5);
+  const [audioDialogOpen, setAudioDialogOpen] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const whiteNoiseAudioContextRef = useRef<AudioContext | null>(null);
+  const whiteNoiseGainNodeRef = useRef<GainNode | null>(null);
+  const whiteNoiseSourceRef = useRef<AudioBufferSourceNode | null>(null);
 
   // ==========================================
   // 함수들 (컴포넌트 내부)
@@ -672,6 +686,229 @@ const GroupStudyRoomPage: React.FC = () => {
     }
   };
 
+  // 백색소음 생성 함수
+  const generateWhiteNoise = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        toast({
+          title: "지원되지 않음",
+          description: "이 브라우저는 오디오를 지원하지 않습니다.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      const audioContext = new AudioContextClass();
+      
+      // AudioContext가 suspended 상태일 수 있으므로 resume 시도
+      if (audioContext.state === "suspended") {
+        audioContext.resume();
+      }
+
+      const bufferSize = 4096;
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = audioVolume * 0.3; // 백색소음은 조금 낮게
+
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      whiteNoiseAudioContextRef.current = audioContext;
+      whiteNoiseGainNodeRef.current = gainNode;
+      whiteNoiseSourceRef.current = source;
+
+      source.start(0);
+      return true;
+    } catch (error) {
+      console.error("Failed to generate white noise:", error);
+      toast({
+        title: "백색소음 재생 실패",
+        description: "백색소음을 재생할 수 없습니다. 브라우저를 확인해주세요.",
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  // 백색소음 정지
+  const stopWhiteNoise = () => {
+    try {
+      if (whiteNoiseSourceRef.current) {
+        whiteNoiseSourceRef.current.stop();
+        whiteNoiseSourceRef.current = null;
+      }
+      if (whiteNoiseAudioContextRef.current) {
+        whiteNoiseAudioContextRef.current.close();
+        whiteNoiseAudioContextRef.current = null;
+      }
+      whiteNoiseGainNodeRef.current = null;
+    } catch (error) {
+      console.error("Failed to stop white noise:", error);
+    }
+  };
+
+  // 오디오 재생/정지
+  const toggleAudio = () => {
+    if (audioType === "none") {
+      setAudioDialogOpen(true);
+      return;
+    }
+
+    if (isAudioPlaying) {
+      // 정지
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    } else {
+      // 재생
+      if (audioType === "whiteNoise") {
+        if (generateWhiteNoise()) {
+          setIsAudioPlaying(true);
+        }
+      } else if (audioType === "ambient" || audioType === "nature") {
+        if (audioRef.current) {
+          audioRef.current.play().catch((error) => {
+            console.error("Failed to play audio:", error);
+            toast({
+              title: "재생 실패",
+              description: "음악을 재생할 수 없습니다.",
+              variant: "destructive",
+            });
+          });
+          setIsAudioPlaying(true);
+        }
+      }
+    }
+  };
+
+  // 오디오 타입 변경
+  const changeAudioType = (type: "none" | "whiteNoise" | "ambient" | "nature") => {
+    // 기존 오디오 정지
+    if (isAudioPlaying) {
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    }
+
+    setAudioType(type);
+
+    if (type === "none") {
+      return;
+    }
+
+    // 새 오디오 시작
+    if (type === "whiteNoise") {
+      if (generateWhiteNoise()) {
+        setIsAudioPlaying(true);
+      }
+    } else if (type === "ambient") {
+      // 분위기 음악 URL - 원하는 음악 URL로 변경 가능
+      // 예: 자신의 음악 파일 URL, SoundCloud, YouTube 등 (직접 재생 가능한 URL)
+      const ambientMusicUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(ambientMusicUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "음악 재생 실패",
+            description: "음악 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = ambientMusicUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play ambient music:", error);
+        toast({
+          title: "재생 실패",
+          description: "음악을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    } else if (type === "nature") {
+      // 자연음악 URL - 원하는 자연음 URL로 변경 가능
+      // 예: 비 소리, 바다 소리, 숲 소리 등 (직접 재생 가능한 URL)
+      const natureSoundUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(natureSoundUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "자연음 재생 실패",
+            description: "자연음 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = natureSoundUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play nature sound:", error);
+        toast({
+          title: "재생 실패",
+          description: "자연음을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    }
+  };
+
+  // 볼륨 변경
+  const handleVolumeChange = (value: number[]) => {
+    const newVolume = value[0] / 100;
+    setAudioVolume(newVolume);
+
+    if (audioType === "whiteNoise" && whiteNoiseGainNodeRef.current) {
+      whiteNoiseGainNodeRef.current.gain.value = newVolume * 0.3;
+    } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+      audioRef.current.volume = newVolume;
+    }
+  };
+
   // 방 나가기 함수
   const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
@@ -728,6 +965,16 @@ const GroupStudyRoomPage: React.FC = () => {
         pomodoroIntervalRef.current = null;
       }
       
+      // 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setAudioType("none");
+      setIsAudioPlaying(false);
+      
       setCurrentSeconds(0);
       setSessionId(null);
       setIsSessionActive(false);
@@ -765,6 +1012,16 @@ const GroupStudyRoomPage: React.FC = () => {
         clearInterval(pomodoroIntervalRef.current);
         pomodoroIntervalRef.current = null;
       }
+      
+      // 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setAudioType("none");
+      setIsAudioPlaying(false);
 
       // 3. 방 삭제 API 호출 (백엔드에서 세션/타이머 자동 종료)
       await studyRoomAPI.deleteRoom(roomId, Number(user.id));
@@ -1130,6 +1387,18 @@ const GroupStudyRoomPage: React.FC = () => {
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [roomId, roomInfo]);
+
+  // 오디오 정리 (컴포넌트 언마운트 시)
+  useEffect(() => {
+    return () => {
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [audioType]);
 
   // ==========================================
   // JSX 렌더링
@@ -1570,6 +1839,271 @@ const GroupStudyRoomPage: React.FC = () => {
                   </PopoverContent>
                 </Popover>
               </div>
+
+              {/* 음악 플레이어 */}
+              <Popover open={audioDialogOpen} onOpenChange={setAudioDialogOpen}>
+                <PopoverTrigger asChild>
+                  <div className={`group relative ml-4 px-4 py-2.5 bg-white rounded-2xl border-2 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer overflow-hidden ${
+                    isAudioPlaying 
+                      ? audioType === "whiteNoise" 
+                        ? "border-purple-300 bg-gradient-to-br from-purple-50 via-purple-50/80 to-white" 
+                        : audioType === "ambient"
+                        ? "border-blue-300 bg-gradient-to-br from-blue-50 via-blue-50/80 to-white"
+                        : audioType === "nature"
+                        ? "border-green-300 bg-gradient-to-br from-green-50 via-green-50/80 to-white"
+                        : "border-gray-200"
+                      : "border-gray-200 hover:border-gray-300"
+                  }`}>
+                    {/* 배경 효과 */}
+                    {isAudioPlaying && (
+                      <div className={`absolute inset-0 opacity-5 ${
+                        audioType === "whiteNoise" ? "bg-purple-400" 
+                        : audioType === "ambient" ? "bg-blue-400"
+                        : audioType === "nature" ? "bg-green-400"
+                        : ""
+                      }`}></div>
+                    )}
+                    
+                    <div className="relative flex items-center gap-3">
+                      {/* 음악 아이콘 */}
+                      <div className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all duration-300 ${
+                        isAudioPlaying 
+                          ? audioType === "whiteNoise" 
+                            ? "bg-purple-100 text-purple-600 shadow-sm" 
+                            : audioType === "ambient"
+                            ? "bg-blue-100 text-blue-600 shadow-sm"
+                            : audioType === "nature"
+                            ? "bg-green-100 text-green-600 shadow-sm"
+                            : "bg-gray-100 text-gray-400"
+                          : "bg-gray-50 text-gray-400 group-hover:bg-gray-100"
+                      }`}>
+                        <Music className="w-5 h-5" />
+                      </div>
+                      
+                      {/* 상태 정보 */}
+                      <div className="flex flex-col min-w-0">
+                        <span className={`text-xs font-medium mb-0.5 ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-500"
+                            : "text-gray-500"
+                        }`}>
+                          {isAudioPlaying ? "재생 중" : "음악"}
+                        </span>
+                        <span className={`text-sm font-bold truncate ${
+                          isAudioPlaying
+                            ? audioType === "whiteNoise" ? "text-purple-700"
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-600"
+                            : "text-gray-400"
+                        }`}>
+                          {audioType === "whiteNoise" ? "백색소음" : audioType === "ambient" ? "분위기 음악" : audioType === "nature" ? "자연음악" : "OFF"}
+                        </span>
+                      </div>
+                      
+                      {/* 재생/일시정지 버튼 */}
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        {isAudioPlaying ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className={`h-8 w-8 p-0 rounded-lg transition-all duration-200 ${
+                              audioType === "whiteNoise" 
+                                ? "hover:bg-purple-100 text-purple-600 hover:scale-110" 
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-600 hover:scale-110"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-600 hover:scale-110"
+                                : "hover:bg-gray-100 text-gray-500"
+                            }`}
+                            title="일시정지"
+                          >
+                            <Pause className="w-4 h-4" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg hover:bg-gray-100 text-gray-500 hover:scale-110 transition-all duration-200"
+                            title="재생"
+                          >
+                            <Play className="w-4 h-4" />
+                          </Button>
+                        )}
+                        
+                        {/* 선택 버튼 */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAudioDialogOpen(true);
+                          }}
+                          className={`h-8 px-3 text-xs rounded-lg transition-all duration-200 ${
+                            isAudioPlaying
+                              ? audioType === "whiteNoise"
+                                ? "hover:bg-purple-100 text-purple-700 border border-purple-200"
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-700 border border-blue-200"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-700 border border-green-200"
+                                : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                              : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                          }`}
+                        >
+                          선택
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-5 shadow-2xl border-gray-200/50 backdrop-blur-sm bg-white/95" onClick={(e) => e.stopPropagation()}>
+                  <div className="space-y-5">
+                    {/* 헤더 */}
+                    <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                      <h4 className="font-bold text-base text-gray-900 flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "bg-green-100 text-green-600"
+                            : "bg-gray-100 text-gray-500"
+                            : "bg-gray-100 text-gray-500"
+                        }`}>
+                          <Music className="w-4 h-4" />
+                        </div>
+                        <span>음악 선택</span>
+                      </h4>
+                      {isAudioPlaying && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={toggleAudio}
+                          className={`h-8 w-8 p-0 rounded-lg transition-all ${
+                            audioType === "whiteNoise" ? "hover:bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "hover:bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "hover:bg-green-100 text-green-600"
+                            : "hover:bg-gray-100 text-gray-500"
+                          }`}
+                        >
+                          <Pause className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {/* 음악 타입 선택 */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button
+                        variant={audioType === "whiteNoise" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "whiteNoise" 
+                            ? "bg-gradient-to-br from-purple-50 to-purple-100 hover:from-purple-100 hover:to-purple-150 text-purple-700 border-2 border-purple-300 shadow-sm" 
+                            : "hover:border-purple-200 hover:bg-purple-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("whiteNoise");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔊</span>
+                        <span className="text-xs font-semibold">백색소음</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "ambient" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "ambient" 
+                            ? "bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-150 text-blue-700 border-2 border-blue-300 shadow-sm" 
+                            : "hover:border-blue-200 hover:bg-blue-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("ambient");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🎵</span>
+                        <span className="text-xs font-semibold">분위기 음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "nature" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "nature" 
+                            ? "bg-gradient-to-br from-green-50 to-green-100 hover:from-green-100 hover:to-green-150 text-green-700 border-2 border-green-300 shadow-sm" 
+                            : "hover:border-green-200 hover:bg-green-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("nature");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🌿</span>
+                        <span className="text-xs font-semibold">자연음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "none" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "none"
+                            ? "bg-gray-100 border-2 border-gray-300"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("none");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔇</span>
+                        <span className="text-xs font-semibold">끄기</span>
+                      </Button>
+                    </div>
+
+                    {/* 볼륨 조절 */}
+                    {audioType !== "none" && (
+                      <div className="space-y-3 pt-3 border-t border-gray-100">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-sm font-semibold flex items-center gap-2 ${
+                            audioType === "whiteNoise" ? "text-purple-700" 
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-700"
+                          }`}>
+                            {audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                            볼륨
+                          </span>
+                          <span className={`text-sm font-bold ${
+                            audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-600"
+                          }`}>
+                            {Math.round(audioVolume * 100)}%
+                          </span>
+                        </div>
+                        <Slider
+                          value={[audioVolume * 100]}
+                          onValueChange={handleVolumeChange}
+                          max={100}
+                          step={1}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
 
               <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
                 {levelInfo && (

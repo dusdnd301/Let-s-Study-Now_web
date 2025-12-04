@@ -55,7 +55,11 @@ import {
   X,
   CheckCircle,
   AlertCircle,
+  Music,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
+import { Slider } from "@/components/ui/slider";
 
 interface ChatMessage {
   id: number;
@@ -146,6 +150,23 @@ const OpenStudyRoomPage: React.FC = () => {
   const [inviteDialogOpen, setInviteDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
 
+  // Audio (백색소음 & 분위기 음악 & 자연음악)
+  const [audioType, setAudioType] = useState<"none" | "whiteNoise" | "ambient" | "nature">("none");
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [audioVolume, setAudioVolume] = useState(0.5);
+  const [audioDialogOpen, setAudioDialogOpen] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const whiteNoiseAudioContextRef = useRef<AudioContext | null>(null);
+  const whiteNoiseGainNodeRef = useRef<GainNode | null>(null);
+  const whiteNoiseSourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  // Pomodoro Timer
+  const [pomodoroMode, setPomodoroMode] = useState<"work" | "shortBreak" | "longBreak">("work");
+  const [pomodoroTime, setPomodoroTime] = useState(25 * 60);
+  const [pomodoroIsRunning, setPomodoroIsRunning] = useState(false);
+  const [pomodoroCycle, setPomodoroCycle] = useState(1);
+  const pomodoroIntervalRef = useRef<any>(null);
+
   // 시간 포맷 함수
   const formatTime = (seconds: number) => {
     const hours = Math.floor(seconds / 3600);
@@ -216,6 +237,70 @@ const OpenStudyRoomPage: React.FC = () => {
       }
     };
   }, [myStatus]);
+
+  // 오디오 cleanup
+  useEffect(() => {
+    return () => {
+      // 컴포넌트 언마운트 시 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, [audioType]);
+
+  // 뽀모도로 타이머
+  useEffect(() => {
+    if (pomodoroIntervalRef.current) {
+      clearInterval(pomodoroIntervalRef.current);
+      pomodoroIntervalRef.current = null;
+    }
+
+    if (pomodoroIsRunning && pomodoroTime > 0) {
+      pomodoroIntervalRef.current = setInterval(() => {
+        setPomodoroTime((prev) => {
+          if (prev <= 1) {
+            setPomodoroIsRunning(false);
+
+            if (pomodoroMode === "work") {
+              toast({
+                title: "🎉 작업 완료!",
+                description: "휴식을 취하세요!",
+              });
+
+              if (pomodoroCycle === 4) {
+                setPomodoroMode("longBreak");
+                setPomodoroTime(15 * 60);
+                setPomodoroCycle(1);
+              } else {
+                setPomodoroMode("shortBreak");
+                setPomodoroTime(5 * 60);
+                setPomodoroCycle((prev) => prev + 1);
+              }
+            } else {
+              toast({
+                title: "휴식 완료",
+                description: "다시 공부를 시작하세요!",
+              });
+              setPomodoroMode("work");
+              setPomodoroTime(25 * 60);
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
+      }
+    };
+  }, [pomodoroIsRunning, pomodoroTime, pomodoroMode, pomodoroCycle]);
 
   // WebSocket 메시지 수신 처리
   const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
@@ -596,6 +681,23 @@ useEffect(() => {
     isLeavingRef.current = true;
 
     try {
+      // 뽀모도로 타이머 정리
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
+      }
+      setPomodoroIsRunning(false);
+
+      // 오디오 정리
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      setAudioType("none");
+      setIsAudioPlaying(false);
+
       localStorage.removeItem("currentOpenStudyRoom");
       await openStudyAPI.leaveRoom(roomId);
       console.log("✅ Successfully left room");
@@ -883,6 +985,263 @@ useEffect(() => {
     }
   };
 
+  // 백색소음 생성 함수
+  const generateWhiteNoise = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) {
+        toast({
+          title: "지원되지 않음",
+          description: "이 브라우저는 오디오를 지원하지 않습니다.",
+          variant: "destructive",
+        });
+        return false;
+      }
+
+      const audioContext = new AudioContextClass();
+      
+      // AudioContext가 suspended 상태일 수 있으므로 resume 시도
+      if (audioContext.state === "suspended") {
+        audioContext.resume();
+      }
+
+      const bufferSize = 4096;
+      const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+
+      const gainNode = audioContext.createGain();
+      gainNode.gain.value = audioVolume * 0.3; // 백색소음은 조금 낮게
+
+      source.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      whiteNoiseAudioContextRef.current = audioContext;
+      whiteNoiseGainNodeRef.current = gainNode;
+      whiteNoiseSourceRef.current = source;
+
+      source.start(0);
+      return true;
+    } catch (error) {
+      console.error("Failed to generate white noise:", error);
+      toast({
+        title: "백색소음 재생 실패",
+        description: "백색소음을 재생할 수 없습니다. 브라우저를 확인해주세요.",
+        variant: "destructive",
+      });
+      return false;
+    }
+  };
+
+  // 백색소음 정지
+  const stopWhiteNoise = () => {
+    try {
+      if (whiteNoiseSourceRef.current) {
+        whiteNoiseSourceRef.current.stop();
+        whiteNoiseSourceRef.current = null;
+      }
+      if (whiteNoiseAudioContextRef.current) {
+        whiteNoiseAudioContextRef.current.close();
+        whiteNoiseAudioContextRef.current = null;
+      }
+      whiteNoiseGainNodeRef.current = null;
+    } catch (error) {
+      console.error("Failed to stop white noise:", error);
+    }
+  };
+
+  // 오디오 재생/정지
+  const toggleAudio = () => {
+    if (audioType === "none") {
+      setAudioDialogOpen(true);
+      return;
+    }
+
+    if (isAudioPlaying) {
+      // 정지
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    } else {
+      // 재생
+      if (audioType === "whiteNoise") {
+        if (generateWhiteNoise()) {
+          setIsAudioPlaying(true);
+        }
+      } else if (audioType === "ambient" || audioType === "nature") {
+        if (audioRef.current) {
+          audioRef.current.play().catch((error) => {
+            console.error("Failed to play audio:", error);
+            toast({
+              title: "재생 실패",
+              description: "음악을 재생할 수 없습니다.",
+              variant: "destructive",
+            });
+          });
+          setIsAudioPlaying(true);
+        }
+      }
+    }
+  };
+
+  // 오디오 타입 변경
+  const changeAudioType = (type: "none" | "whiteNoise" | "ambient" | "nature") => {
+    // 기존 오디오 정지
+    if (isAudioPlaying) {
+      if (audioType === "whiteNoise") {
+        stopWhiteNoise();
+      } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+        audioRef.current.pause();
+      }
+      setIsAudioPlaying(false);
+    }
+
+    setAudioType(type);
+
+    if (type === "none") {
+      return;
+    }
+
+    // 새 오디오 시작
+    if (type === "whiteNoise") {
+      if (generateWhiteNoise()) {
+        setIsAudioPlaying(true);
+      }
+    } else if (type === "ambient") {
+      // 분위기 음악 URL - 원하는 음악 URL로 변경 가능
+      const ambientMusicUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(ambientMusicUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "음악 재생 실패",
+            description: "음악 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = ambientMusicUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play ambient music:", error);
+        toast({
+          title: "재생 실패",
+          description: "음악을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    } else if (type === "nature") {
+      // 자연음악 URL - 원하는 자연음 URL로 변경 가능
+      const natureSoundUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3";
+      
+      if (!audioRef.current) {
+        audioRef.current = new Audio(natureSoundUrl);
+        audioRef.current.loop = true;
+        audioRef.current.volume = audioVolume;
+        audioRef.current.addEventListener("ended", () => {
+          setIsAudioPlaying(false);
+        });
+        audioRef.current.addEventListener("error", (e) => {
+          console.error("Audio error:", e);
+          toast({
+            title: "자연음 재생 실패",
+            description: "자연음 파일을 불러올 수 없습니다. 인터넷 연결을 확인해주세요.",
+            variant: "destructive",
+          });
+          setIsAudioPlaying(false);
+          setAudioType("none");
+        });
+      } else {
+        audioRef.current.src = natureSoundUrl;
+        audioRef.current.volume = audioVolume;
+      }
+      
+      audioRef.current.play().catch((error) => {
+        console.error("Failed to play nature sound:", error);
+        toast({
+          title: "재생 실패",
+          description: "자연음을 재생할 수 없습니다. 브라우저 설정을 확인해주세요.",
+          variant: "destructive",
+        });
+        setIsAudioPlaying(false);
+        setAudioType("none");
+      });
+      setIsAudioPlaying(true);
+    }
+  };
+
+  // 볼륨 변경
+  const handleVolumeChange = (value: number[]) => {
+    const newVolume = value[0] / 100;
+    setAudioVolume(newVolume);
+
+    if (audioType === "whiteNoise" && whiteNoiseGainNodeRef.current) {
+      whiteNoiseGainNodeRef.current.gain.value = newVolume * 0.3;
+    } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+      audioRef.current.volume = newVolume;
+    }
+  };
+
+  // 뽀모도로 타이머 핸들러
+  const handlePomodoroStart = () => {
+    setPomodoroIsRunning(true);
+  };
+
+  const handlePomodoroPause = () => {
+    setPomodoroIsRunning(false);
+  };
+
+  const handlePomodoroReset = () => {
+    setPomodoroIsRunning(false);
+    if (pomodoroMode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (pomodoroMode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
+    }
+    toast({
+      title: "뽀모도로 리셋",
+      description: "타이머가 초기화되었습니다.",
+    });
+  };
+
+  const handlePomodoroModeChange = (mode: "work" | "shortBreak" | "longBreak") => {
+    setPomodoroIsRunning(false);
+    setPomodoroMode(mode);
+    if (mode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (mode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
+    }
+  };
+
   const handleCopyInviteLink = () => {
     const inviteLink = `${window.location.origin}/#/open-study/room/${roomId}`;
     navigator.clipboard.writeText(inviteLink);
@@ -928,13 +1287,28 @@ useEffect(() => {
           clearInterval(intervalRef.current);
           intervalRef.current = null;
         }
+        if (pomodoroIntervalRef.current) {
+          clearInterval(pomodoroIntervalRef.current);
+          pomodoroIntervalRef.current = null;
+        }
         setCurrentSeconds(0);
         setSessionId(null);
         setIsSessionActive(false);
+        setPomodoroIsRunning(false);
       } catch (sessionError: any) {
         console.error("Failed to end session:", sessionError);
       }
     }
+
+    // 오디오 정리
+    if (audioType === "whiteNoise") {
+      stopWhiteNoise();
+    } else if ((audioType === "ambient" || audioType === "nature") && audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setAudioType("none");
+    setIsAudioPlaying(false);
 
     // WebSocket 연결 해제
     if (roomId) {
@@ -1144,6 +1518,400 @@ useEffect(() => {
                   리셋
                 </Button>
               </div>
+
+              {/* 뽀모도로 타이머 */}
+              <div className="flex items-center gap-5 ml-4 px-5 py-3 bg-white rounded-xl border border-red-100 shadow-md hover:shadow-lg transition-all duration-200">
+                <div className="flex flex-col items-center">
+                  <span className="text-base font-semibold text-red-600 whitespace-nowrap tracking-wide uppercase">Pomodoro</span>
+                  <span className="text-xs text-gray-500 font-normal">뽀모도로</span>
+                </div>
+                
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-red-200 to-transparent"></div>
+                
+                <div className="flex items-center gap-2">
+                  <span className={`text-2xl font-mono font-semibold tabular-nums ${
+                    pomodoroIsRunning
+                      ? pomodoroMode === "work" ? "text-red-600" : "text-blue-500"
+                      : "text-gray-400"
+                  }`}>
+                    {formatTime(pomodoroTime)}
+                  </span>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <Badge 
+                    variant="secondary" 
+                    className={`text-xs font-medium px-2.5 py-1 whitespace-nowrap ${
+                      pomodoroMode === "work" 
+                        ? "bg-red-100 text-red-700 border border-red-200" 
+                        : pomodoroMode === "shortBreak"
+                        ? "bg-blue-100 text-blue-700 border border-blue-200"
+                        : "bg-green-100 text-green-700 border border-green-200"
+                    }`}
+                  >
+                    {pomodoroMode === "work" ? "작업" : pomodoroMode === "shortBreak" ? "짧은 휴식" : "긴 휴식"}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs font-medium px-2.5 py-1 border-gray-300 text-gray-600 bg-gray-50">
+                    {pomodoroCycle}/4
+                  </Badge>
+                </div>
+                
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-gray-200 to-transparent"></div>
+                
+                <div className="flex items-center gap-1.5">
+                  {pomodoroIsRunning ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroPause}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="일시정지"
+                    >
+                      <Pause className="w-4 h-4 text-red-600" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroStart}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="시작"
+                    >
+                      <Play className="w-4 h-4 text-red-600" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePomodoroReset}
+                    className="h-9 w-9 p-0 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors"
+                    title="리셋"
+                  >
+                    <Clock className="w-4 h-4" />
+                  </Button>
+                </div>
+                
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 whitespace-nowrap transition-colors"
+                    >
+                      모드 변경
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-3 shadow-xl border-gray-200">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-gray-600 mb-3 px-1">Pomodoro Mode</div>
+                      <Button
+                        variant={pomodoroMode === "work" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "work"
+                            ? "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("work")}
+                      >
+                        <span className="mr-2">📚</span>
+                        작업 (25분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "shortBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "shortBreak"
+                            ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("shortBreak")}
+                      >
+                        <span className="mr-2">☕</span>
+                        짧은 휴식 (5분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "longBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "longBreak"
+                            ? "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("longBreak")}
+                      >
+                        <span className="mr-2">🌴</span>
+                        긴 휴식 (15분)
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              {/* 음악 플레이어 */}
+              <Popover open={audioDialogOpen} onOpenChange={setAudioDialogOpen}>
+                <PopoverTrigger asChild>
+                  <div className={`group relative ml-4 px-4 py-2.5 bg-white rounded-2xl border-2 shadow-sm hover:shadow-md transition-all duration-300 cursor-pointer overflow-hidden ${
+                    isAudioPlaying 
+                      ? audioType === "whiteNoise" 
+                        ? "border-purple-300 bg-gradient-to-br from-purple-50 via-purple-50/80 to-white" 
+                        : audioType === "ambient"
+                        ? "border-blue-300 bg-gradient-to-br from-blue-50 via-blue-50/80 to-white"
+                        : audioType === "nature"
+                        ? "border-green-300 bg-gradient-to-br from-green-50 via-green-50/80 to-white"
+                        : "border-gray-200"
+                      : "border-gray-200 hover:border-gray-300"
+                  }`}>
+                    {/* 배경 효과 */}
+                    {isAudioPlaying && (
+                      <div className={`absolute inset-0 opacity-5 ${
+                        audioType === "whiteNoise" ? "bg-purple-400" 
+                        : audioType === "ambient" ? "bg-blue-400"
+                        : audioType === "nature" ? "bg-green-400"
+                        : ""
+                      }`}></div>
+                    )}
+                    
+                    <div className="relative flex items-center gap-3">
+                      {/* 음악 아이콘 */}
+                      <div className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all duration-300 ${
+                        isAudioPlaying 
+                          ? audioType === "whiteNoise" 
+                            ? "bg-purple-100 text-purple-600 shadow-sm" 
+                            : audioType === "ambient"
+                            ? "bg-blue-100 text-blue-600 shadow-sm"
+                            : audioType === "nature"
+                            ? "bg-green-100 text-green-600 shadow-sm"
+                            : "bg-gray-100 text-gray-400"
+                          : "bg-gray-50 text-gray-400 group-hover:bg-gray-100"
+                      }`}>
+                        <Music className="w-5 h-5" />
+                      </div>
+                      
+                      {/* 상태 정보 */}
+                      <div className="flex flex-col min-w-0">
+                        <span className={`text-xs font-medium mb-0.5 ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-500"
+                            : "text-gray-500"
+                        }`}>
+                          {isAudioPlaying ? "재생 중" : "음악"}
+                        </span>
+                        <span className={`text-sm font-bold truncate ${
+                          isAudioPlaying
+                            ? audioType === "whiteNoise" ? "text-purple-700"
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-600"
+                            : "text-gray-400"
+                        }`}>
+                          {audioType === "whiteNoise" ? "백색소음" : audioType === "ambient" ? "분위기 음악" : audioType === "nature" ? "자연음악" : "OFF"}
+                        </span>
+                      </div>
+                      
+                      {/* 재생/일시정지 버튼 */}
+                      <div className="flex items-center gap-1.5 ml-auto">
+                        {isAudioPlaying ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className={`h-8 w-8 p-0 rounded-lg transition-all duration-200 ${
+                              audioType === "whiteNoise" 
+                                ? "hover:bg-purple-100 text-purple-600 hover:scale-110" 
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-600 hover:scale-110"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-600 hover:scale-110"
+                                : "hover:bg-gray-100 text-gray-500"
+                            }`}
+                            title="일시정지"
+                          >
+                            <Pause className="w-4 h-4" />
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleAudio();
+                            }}
+                            className="h-8 w-8 p-0 rounded-lg hover:bg-gray-100 text-gray-500 hover:scale-110 transition-all duration-200"
+                            title="재생"
+                          >
+                            <Play className="w-4 h-4" />
+                          </Button>
+                        )}
+                        
+                        {/* 선택 버튼 */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAudioDialogOpen(true);
+                          }}
+                          className={`h-8 px-3 text-xs rounded-lg transition-all duration-200 ${
+                            isAudioPlaying
+                              ? audioType === "whiteNoise"
+                                ? "hover:bg-purple-100 text-purple-700 border border-purple-200"
+                                : audioType === "ambient"
+                                ? "hover:bg-blue-100 text-blue-700 border border-blue-200"
+                                : audioType === "nature"
+                                ? "hover:bg-green-100 text-green-700 border border-green-200"
+                                : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                              : "hover:bg-gray-100 text-gray-700 border border-gray-200"
+                          }`}
+                        >
+                          선택
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-5 shadow-2xl border-gray-200/50 backdrop-blur-sm bg-white/95" onClick={(e) => e.stopPropagation()}>
+                  <div className="space-y-5">
+                    {/* 헤더 */}
+                    <div className="flex items-center justify-between pb-2 border-b border-gray-100">
+                      <h4 className="font-bold text-base text-gray-900 flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg ${
+                          isAudioPlaying 
+                            ? audioType === "whiteNoise" ? "bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "bg-green-100 text-green-600"
+                            : "bg-gray-100 text-gray-500"
+                            : "bg-gray-100 text-gray-500"
+                        }`}>
+                          <Music className="w-4 h-4" />
+                        </div>
+                        <span>음악 선택</span>
+                      </h4>
+                      {isAudioPlaying && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={toggleAudio}
+                          className={`h-8 w-8 p-0 rounded-lg transition-all ${
+                            audioType === "whiteNoise" ? "hover:bg-purple-100 text-purple-600" 
+                            : audioType === "ambient" ? "hover:bg-blue-100 text-blue-600"
+                            : audioType === "nature" ? "hover:bg-green-100 text-green-600"
+                            : "hover:bg-gray-100 text-gray-500"
+                          }`}
+                        >
+                          <Pause className="w-4 h-4" />
+                        </Button>
+                      )}
+                    </div>
+                    
+                    {/* 음악 타입 선택 */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <Button
+                        variant={audioType === "whiteNoise" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "whiteNoise" 
+                            ? "bg-gradient-to-br from-purple-50 to-purple-100 hover:from-purple-100 hover:to-purple-150 text-purple-700 border-2 border-purple-300 shadow-sm" 
+                            : "hover:border-purple-200 hover:bg-purple-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("whiteNoise");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔊</span>
+                        <span className="text-xs font-semibold">백색소음</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "ambient" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "ambient" 
+                            ? "bg-gradient-to-br from-blue-50 to-blue-100 hover:from-blue-100 hover:to-blue-150 text-blue-700 border-2 border-blue-300 shadow-sm" 
+                            : "hover:border-blue-200 hover:bg-blue-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("ambient");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🎵</span>
+                        <span className="text-xs font-semibold">분위기 음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "nature" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "nature" 
+                            ? "bg-gradient-to-br from-green-50 to-green-100 hover:from-green-100 hover:to-green-150 text-green-700 border-2 border-green-300 shadow-sm" 
+                            : "hover:border-green-200 hover:bg-green-50/50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("nature");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🌿</span>
+                        <span className="text-xs font-semibold">자연음악</span>
+                      </Button>
+                      <Button
+                        variant={audioType === "none" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-auto py-4 flex-col gap-2.5 transition-all duration-200 ${
+                          audioType === "none"
+                            ? "bg-gray-100 border-2 border-gray-300"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => {
+                          changeAudioType("none");
+                          setAudioDialogOpen(false);
+                        }}
+                      >
+                        <span className="text-3xl">🔇</span>
+                        <span className="text-xs font-semibold">끄기</span>
+                      </Button>
+                    </div>
+
+                    {/* 볼륨 조절 */}
+                    {audioType !== "none" && (
+                      <div className="space-y-3 pt-3 border-t border-gray-100">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-sm font-semibold flex items-center gap-2 ${
+                            audioType === "whiteNoise" ? "text-purple-700" 
+                            : audioType === "ambient" ? "text-blue-700"
+                            : audioType === "nature" ? "text-green-700"
+                            : "text-gray-700"
+                          }`}>
+                            {audioVolume === 0 ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                            볼륨
+                          </span>
+                          <span className={`text-sm font-bold ${
+                            audioType === "whiteNoise" ? "text-purple-600" 
+                            : audioType === "ambient" ? "text-blue-600"
+                            : audioType === "nature" ? "text-green-600"
+                            : "text-gray-600"
+                          }`}>
+                            {Math.round(audioVolume * 100)}%
+                          </span>
+                        </div>
+                        <Slider
+                          value={[audioVolume * 100]}
+                          onValueChange={handleVolumeChange}
+                          max={100}
+                          step={1}
+                          className="w-full"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
 
               <div className="ml-auto flex items-center gap-4 text-sm text-gray-600">
                 {levelInfo && (
