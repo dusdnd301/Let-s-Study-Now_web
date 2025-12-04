@@ -649,6 +649,29 @@ const GroupStudyRoomPage: React.FC = () => {
     }
   };
 
+  // 참여자 목록 새로고침 함수
+  const refreshParticipants = async () => {
+    if (!roomId || !roomInfo) return;
+    
+    try {
+      const pList = await studyRoomAPI.getParticipants(roomId);
+      console.log("🔄 Participants refreshed:", pList.length);
+      
+      if (Array.isArray(pList)) {
+        const participantList = pList.map((p: any) => ({
+          memberId: p.memberId,
+          username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : `사용자${p.memberId}`,
+          profileImageUrl: undefined,
+          joinedAt: p.joinedAt,
+        }));
+        
+        setParticipants(participantList as any);
+      }
+    } catch (error) {
+      console.error("Failed to refresh participants:", error);
+    }
+  };
+
   // 방 나가기 함수
   const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
@@ -659,55 +682,19 @@ const GroupStudyRoomPage: React.FC = () => {
 
       // 1. WebSocket 구독 해제 및 연결 종료 (재연결 방지)
       if (roomId) {
-        console.log("🔌 Unsubscribing and disconnecting WebSocket...");
+        console.log("🔌 Disconnecting WebSocket (preventing reconnection)...");
         webSocketService.unsubscribe(Number(roomId), "GROUP");
-        webSocketService.disconnect();
+        webSocketService.disconnect(true); // ✅ 재연결 차단
       }
 
-      // 2. 스터디 세션 종료
-      if (sessionId !== null) {
-        try {
-          const endResult = await sessionAPI.endSession(sessionId);
-          console.log("Session ended successfully:", endResult);
-
-          if (endResult.leveledUp && endResult.newLevel !== null) {
-            toast({
-              title: "🎉 레벨업!",
-              description: `축하합니다! 레벨 ${endResult.newLevel}이 되었습니다!`,
-            });
-          }
-
-          if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-          }
-          setCurrentSeconds(0);
-          setSessionId(null);
-          setIsSessionActive(false);
-
-          if (pomodoroIntervalRef.current) {
-            clearInterval(pomodoroIntervalRef.current);
-            pomodoroIntervalRef.current = null;
-          }
-          setPomodoroIsRunning(false);
-        } catch (sessionError: any) {
-          console.error("Failed to end session:", sessionError);
-        }
-      }
-
-      // 3. 타이머 종료
-      try {
-        await timerAPI.endTimer();
-        console.log("Timer ended successfully");
-      } catch (timerError) {
-        console.error("Failed to end timer:", timerError);
-      }
-
-      // 4. 방 나가기 API 호출
+      // 2. 방 나가기 API 호출 (백엔드에서 세션/타이머 자동 종료)
       if (user?.id) {
         try {
           await studyRoomAPI.leaveRoom(roomId, Number(user.id));
+          console.log("✅ Leave room API success");
         } catch (leaveError: any) {
+          console.error("❌ Leave room API failed:", leaveError);
+          
           // 방장 퇴장 불가 에러 처리
           if (leaveError?.message?.includes("방 생성자는")) {
             toast({
@@ -716,17 +703,43 @@ const GroupStudyRoomPage: React.FC = () => {
               variant: "destructive",
             });
             isLeavingRef.current = false;
+            
+            // WebSocket 재연결 (퇴장 취소이므로)
+            webSocketService.connect(
+              () => console.log("WebSocket reconnected after failed leave"),
+              (error) => console.error("WebSocket reconnection failed:", error)
+            );
+            
             return;
           }
-          throw leaveError;
+          
+          // 다른 에러는 무시하고 계속 진행 (UI 정리는 해야 함)
+          console.warn("Leave API failed but continuing with cleanup:", leaveError.message);
         }
       }
+
+      // 3. UI 정리 (세션, 타이머 state 초기화)
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
+      }
+      
+      setCurrentSeconds(0);
+      setSessionId(null);
+      setIsSessionActive(false);
+      setPomodoroIsRunning(false);
       hasJoinedRef.current = false;
       
       console.log("✅ Successfully left the room");
     } catch (error) {
       console.error("Failed to leave room:", error);
       hasJoinedRef.current = false;
+    } finally {
+      isLeavingRef.current = false;
     }
   };
 
@@ -740,7 +753,7 @@ const GroupStudyRoomPage: React.FC = () => {
       // 1. WebSocket 구독 해제 및 연결 종료
       if (roomId) {
         webSocketService.unsubscribe(Number(roomId), "GROUP");
-        webSocketService.disconnect();
+        webSocketService.disconnect(true); // ✅ 재연결 차단
       }
 
       // 2. UI 정리
@@ -934,10 +947,7 @@ const GroupStudyRoomPage: React.FC = () => {
             const pList = await studyRoomAPI.getParticipants(roomId);
             console.log("📋 Participants API response:", pList);
             
-            // API 응답: [{ id, memberId, joinedAt }]
-            // memberId로 사용자 정보를 매핑해야 함
             if (Array.isArray(pList) && pList.length > 0) {
-              // 일단 memberId만 표시 (나중에 사용자 정보 API 추가 가능)
               const participantList = pList.map((p: any) => ({
                 memberId: p.memberId,
                 username: p.memberId === roomData.creatorId ? roomData.creatorUsername : `사용자${p.memberId}`,
@@ -998,33 +1008,27 @@ const GroupStudyRoomPage: React.FC = () => {
 
         hasJoinedRef.current = true;
 
-        // 3. 스터디 세션 시작
+        // 3. 세션 및 타이머 상태 로드 (백엔드에서 joinRoom 시 자동 시작됨)
         try {
-          const roomIdNum = parseInt(roomId, 10);
-          if (!isNaN(roomIdNum)) {
-            const sessionResponse = await sessionAPI.startSession({
-              studyType: 'GROUP_STUDY',
-              roomId: roomIdNum
-            });
-
-            setSessionId(sessionResponse.sessionId);
-            setIsSessionActive(true);
-            setCurrentSeconds(0);
-          }
+          // 레벨 정보 조회
+          const levelInfo = await sessionAPI.getLevelInfo();
+          console.log("✅ Level info loaded:", levelInfo);
         } catch (sessionError: any) {
-          console.error("Failed to start session:", sessionError);
+          console.warn("레벨 정보 로드 실패:", sessionError);
         }
 
-        // 4. 타이머 시작
         try {
-          const isCreator = roomData.creatorId === Number(user.id);
-          const timerResponse = await timerAPI.startTimer(
-            Number(roomId),
-            isCreator
-          );
+          // 타이머 상태 조회
+          const timerResponse = await timerAPI.getTimerStatus();
           setTimerStatus(timerResponse);
+          console.log("✅ Timer status loaded:", timerResponse);
+          
+          // 타이머가 실행 중이면 세션도 활성화된 것으로 간주
+          if (timerResponse && timerResponse.timerStatus === "RUNNING") {
+            setIsSessionActive(true);
+          }
         } catch (timerError: any) {
-          console.error("타이머 시작 실패:", timerError);
+          console.warn("타이머 상태 로드 실패:", timerError);
         }
 
         clearTimeout(timeoutId);
@@ -1065,59 +1069,46 @@ const GroupStudyRoomPage: React.FC = () => {
   // 브라우저 이벤트 처리
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
+      if (roomId && hasJoinedRef.current && !isLeavingRef.current && user?.id) {
         isLeavingRef.current = true;
 
         const baseURL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
         // WebSocket 정리
         webSocketService.unsubscribe(Number(roomId), "GROUP");
-        webSocketService.disconnect();
+        webSocketService.disconnect(true); // ✅ 재연결 차단
 
-        if (sessionId !== null) {
-          fetch(`${baseURL}/api/study-sessions/${sessionId}/end`, {
-            method: "POST",
-            credentials: "include",
-            keepalive: true,
-            headers: { "Content-Type": "application/json" },
-          }).catch((err) => console.error("Failed to end session:", err));
-        }
-
-        fetch(`${baseURL}/api/timer/end`, {
-          method: "POST",
-          credentials: "include",
-          keepalive: true,
-          headers: { "Content-Type": "application/json" },
-        }).catch((err) => console.error("Failed to end timer:", err));
-
-        const url = `${baseURL}/api/study-rooms/${roomId}/leave`;
+        // 방 나가기만 호출 (백엔드에서 세션/타이머 자동 종료)
+        const url = `${baseURL}/api/study-rooms/${roomId}/leave?memberId=${user.id}`;
         fetch(url, {
           method: "POST",
           credentials: "include",
           keepalive: true,
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${localStorage.getItem("authToken")}`
+          },
         }).catch((err) => console.error("Failed to leave room:", err));
       }
     };
 
     window.addEventListener("beforeunload", handleBeforeUnload);
 
-    // ✅ cleanup 함수에서 leaveRoom 호출 제거
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [roomId, sessionId]);
+  }, [roomId, user]);
 
-  // 참여자 새로고침
+  // 참여자 새로고침 (5초마다)
   useEffect(() => {
-    if (!roomId || !hasJoinedRef.current || !roomInfo) return;
+    if (!roomId || !roomInfo) return;
 
     const refresh = async () => {
       try {
         const pList = await studyRoomAPI.getParticipants(roomId);
-        console.log("🔄 Refreshing participants:", pList);
+        console.log("🔄 Participants count:", pList.length);
         
-        if (Array.isArray(pList) && pList.length > 0) {
+        if (Array.isArray(pList)) {
           const participantList = pList.map((p: any) => ({
             memberId: p.memberId,
             username: p.memberId === roomInfo.creatorId ? roomInfo.creatorUsername : `사용자${p.memberId}`,
@@ -1126,8 +1117,6 @@ const GroupStudyRoomPage: React.FC = () => {
           }));
           
           setParticipants(participantList as any);
-        } else {
-          setParticipants([]);
         }
       } catch (e) {
         console.error("Failed to refresh participants:", e);
@@ -1137,7 +1126,8 @@ const GroupStudyRoomPage: React.FC = () => {
     // 즉시 한 번 실행
     refresh();
 
-    const interval = setInterval(refresh, 10000);
+    // 5초마다 새로고침
+    const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [roomId, roomInfo]);
 
@@ -1228,9 +1218,32 @@ const GroupStudyRoomPage: React.FC = () => {
             </PopoverTrigger>
             <PopoverContent className="w-72 p-4">
               <div className="space-y-3">
-                <h4 className="font-semibold text-sm text-gray-900">
-                  👥 참여자 목록
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="font-semibold text-sm text-gray-900">
+                    👥 참여자 목록
+                  </h4>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={refreshParticipants}
+                    className="h-7 w-7 p-0"
+                    title="새로고침"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2" />
+                    </svg>
+                  </Button>
+                </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {participants.map((participant) => (
                     <div
@@ -1305,13 +1318,22 @@ const GroupStudyRoomPage: React.FC = () => {
             초대
           </Button>
           
-          {/* 방장 전용: 방 삭제 버튼 */}
-          {roomInfo.creatorId === Number(user?.id) && participants.length === 1 && (
+          {/* 방장 전용: 방 삭제 버튼 (항상 표시, 백엔드에서 검증) */}
+          {roomInfo.creatorId === Number(user?.id) && (
             <Button
               variant="outline"
               size="sm"
               className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-300"
               onClick={async () => {
+                if (participants.length > 1) {
+                  toast({
+                    title: "삭제 불가",
+                    description: "다른 멤버가 방에 있을 때는 삭제할 수 없습니다. 모든 멤버가 나간 후 삭제해주세요.",
+                    variant: "destructive",
+                  });
+                  return;
+                }
+                
                 if (confirm("정말로 이 방을 삭제하시겠습니까?\n\n⚠️ 삭제 후에는 복구할 수 없으며, 세션 기록이 저장됩니다.")) {
                   await deleteRoom();
                 }
