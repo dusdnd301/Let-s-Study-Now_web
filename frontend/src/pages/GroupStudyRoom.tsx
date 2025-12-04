@@ -118,6 +118,13 @@ const GroupStudyRoomPage: React.FC = () => {
   // Level Info
   const [levelInfo, setLevelInfo] = useState<LevelInfoDto | null>(null);
 
+  // Pomodoro Timer
+  const [pomodoroMode, setPomodoroMode] = useState<"work" | "shortBreak" | "longBreak">("work");
+  const [pomodoroTime, setPomodoroTime] = useState(25 * 60); // 25분 (초 단위)
+  const [pomodoroIsRunning, setPomodoroIsRunning] = useState(false);
+  const [pomodoroCycle, setPomodoroCycle] = useState(1); // 1-4 사이클
+  const pomodoroIntervalRef = useRef<any>(null);
+
   // Participants (UI용 더미 데이터)
   const [participants, setParticipants] = useState<Participant[]>([
     {
@@ -260,6 +267,61 @@ const GroupStudyRoomPage: React.FC = () => {
       }
     };
   }, [myStatus]);
+
+  // 뽀모도로 타이머 로직
+  useEffect(() => {
+    if (pomodoroIntervalRef.current) {
+      clearInterval(pomodoroIntervalRef.current);
+      pomodoroIntervalRef.current = null;
+    }
+
+    if (pomodoroIsRunning && pomodoroTime > 0) {
+      pomodoroIntervalRef.current = setInterval(() => {
+        setPomodoroTime((prev) => {
+          if (prev <= 1) {
+            // 시간 종료 - 다음 사이클로 전환
+            setPomodoroIsRunning(false);
+            
+            if (pomodoroMode === "work") {
+              // 작업 완료
+              toast({
+                title: "🎉 작업 완료!",
+                description: "휴식을 취하세요!",
+              });
+              
+              // 4번째 사이클이면 긴 휴식, 아니면 짧은 휴식
+              if (pomodoroCycle === 4) {
+                setPomodoroMode("longBreak");
+                setPomodoroTime(15 * 60);
+                setPomodoroCycle(1);
+              } else {
+                setPomodoroMode("shortBreak");
+                setPomodoroTime(5 * 60);
+                setPomodoroCycle((prev) => prev + 1);
+              }
+            } else {
+              // 휴식 완료
+              toast({
+                title: "휴식 완료",
+                description: "다시 공부를 시작하세요!",
+              });
+              setPomodoroMode("work");
+              setPomodoroTime(25 * 60);
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (pomodoroIntervalRef.current) {
+        clearInterval(pomodoroIntervalRef.current);
+        pomodoroIntervalRef.current = null;
+      }
+    };
+  }, [pomodoroIsRunning, pomodoroTime, pomodoroMode, pomodoroCycle]);
 
   // ✅ 타이머 상태 폴링 (1초마다) - 기존 timerAPI용 (필요시 유지)
   useEffect(() => {
@@ -503,6 +565,13 @@ const GroupStudyRoomPage: React.FC = () => {
           setCurrentSeconds(0);
           setSessionId(null);
           setIsSessionActive(false);
+          
+          // 뽀모도로 타이머 정리
+          if (pomodoroIntervalRef.current) {
+            clearInterval(pomodoroIntervalRef.current);
+            pomodoroIntervalRef.current = null;
+          }
+          setPomodoroIsRunning(false);
         } catch (sessionError: any) {
           console.error("Failed to end session:", sessionError);
           // 세션 종료 실패해도 방 나가기는 계속 진행
@@ -522,6 +591,42 @@ const GroupStudyRoomPage: React.FC = () => {
     } catch (error) {
       console.error("Failed to leave room:", error);
       hasJoinedRef.current = false;
+    }
+  };
+
+  // 뽀모도로 타이머 핸들러
+  const handlePomodoroStart = () => {
+    setPomodoroIsRunning(true);
+  };
+
+  const handlePomodoroPause = () => {
+    setPomodoroIsRunning(false);
+  };
+
+  const handlePomodoroReset = () => {
+    setPomodoroIsRunning(false);
+    if (pomodoroMode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (pomodoroMode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
+    }
+    toast({
+      title: "뽀모도로 리셋",
+      description: "타이머가 초기화되었습니다.",
+    });
+  };
+
+  const handlePomodoroModeChange = (mode: "work" | "shortBreak" | "longBreak") => {
+    setPomodoroIsRunning(false);
+    setPomodoroMode(mode);
+    if (mode === "work") {
+      setPomodoroTime(25 * 60);
+    } else if (mode === "shortBreak") {
+      setPomodoroTime(5 * 60);
+    } else {
+      setPomodoroTime(15 * 60);
     }
   };
 
@@ -1013,6 +1118,142 @@ const GroupStudyRoomPage: React.FC = () => {
                 >
                   리셋
                 </Button>
+              </div>
+
+              {/* 뽀모도로 타이머 */}
+              <div className="flex items-center gap-5 ml-4 px-5 py-3 bg-white rounded-xl border border-red-100 shadow-md hover:shadow-lg transition-all duration-200">
+                {/* 뽀모도로 라벨 */}
+                <div className="flex flex-col items-center">
+                  <span className="text-base font-semibold text-red-600 whitespace-nowrap tracking-wide uppercase">Pomodoro</span>
+                  <span className="text-xs text-gray-500 font-normal">뽀모도로</span>
+                </div>
+                
+                {/* 구분선 */}
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-red-200 to-transparent"></div>
+                
+                {/* 시간 표시 */}
+                <div className="flex items-center gap-2">
+                  <span className={`text-2xl font-mono font-semibold tabular-nums ${
+                    pomodoroIsRunning
+                      ? pomodoroMode === "work" ? "text-red-600" : "text-blue-500"
+                      : "text-gray-400"
+                  }`}>
+                    {formatTime(pomodoroTime)}
+                  </span>
+                </div>
+                
+                {/* 모드 및 사이클 */}
+                <div className="flex items-center gap-2">
+                  <Badge 
+                    variant="secondary" 
+                    className={`text-xs font-medium px-2.5 py-1 whitespace-nowrap ${
+                      pomodoroMode === "work" 
+                        ? "bg-red-100 text-red-700 border border-red-200" 
+                        : pomodoroMode === "shortBreak"
+                        ? "bg-blue-100 text-blue-700 border border-blue-200"
+                        : "bg-green-100 text-green-700 border border-green-200"
+                    }`}
+                  >
+                    {pomodoroMode === "work" ? "작업" : pomodoroMode === "shortBreak" ? "짧은 휴식" : "긴 휴식"}
+                  </Badge>
+                  <Badge variant="outline" className="text-xs font-medium px-2.5 py-1 border-gray-300 text-gray-600 bg-gray-50">
+                    {pomodoroCycle}/4
+                  </Badge>
+                </div>
+                
+                {/* 구분선 */}
+                <div className="h-8 w-px bg-gradient-to-b from-transparent via-gray-200 to-transparent"></div>
+                
+                {/* 컨트롤 버튼 */}
+                <div className="flex items-center gap-1.5">
+                  {pomodoroIsRunning ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroPause}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="일시정지"
+                    >
+                      <Pause className="w-4 h-4 text-red-600" />
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handlePomodoroStart}
+                      className="h-9 w-9 p-0 rounded-lg hover:bg-red-50 transition-colors"
+                      title="시작"
+                    >
+                      <Play className="w-4 h-4 text-red-600" />
+                    </Button>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePomodoroReset}
+                    className="h-9 w-9 p-0 rounded-lg text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors"
+                    title="리셋"
+                  >
+                    <Clock className="w-4 h-4" />
+                  </Button>
+                </div>
+                
+                {/* 모드 선택 */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-9 text-xs border-gray-300 text-gray-700 hover:bg-gray-50 hover:border-gray-400 whitespace-nowrap transition-colors"
+                    >
+                      모드 변경
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-56 p-3 shadow-xl border-gray-200">
+                    <div className="space-y-1.5">
+                      <div className="text-xs font-semibold text-gray-600 mb-3 px-1">Pomodoro Mode</div>
+                      <Button
+                        variant={pomodoroMode === "work" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "work"
+                            ? "bg-red-50 hover:bg-red-100 text-red-700 border border-red-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("work")}
+                      >
+                        <span className="mr-2">📚</span>
+                        작업 (25분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "shortBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "shortBreak"
+                            ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("shortBreak")}
+                      >
+                        <span className="mr-2">☕</span>
+                        짧은 휴식 (5분)
+                      </Button>
+                      <Button
+                        variant={pomodoroMode === "longBreak" ? "default" : "ghost"}
+                        size="sm"
+                        className={`w-full justify-start transition-all ${
+                          pomodoroMode === "longBreak"
+                            ? "bg-green-50 hover:bg-green-100 text-green-700 border border-green-200"
+                            : "hover:bg-gray-50"
+                        }`}
+                        onClick={() => handlePomodoroModeChange("longBreak")}
+                      >
+                        <span className="mr-2">🌴</span>
+                        긴 휴식 (15분)
+                      </Button>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               {/* ✅ 총 학습 시간 + 레벨 + 질문 개수 */}
