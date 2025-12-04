@@ -36,6 +36,7 @@ class WebSocketService {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 3000;
+  private shouldReconnect = true; // ✅ 재연결 플래그 추가
 
   /**
    * WebSocket 연결
@@ -59,10 +60,13 @@ class WebSocketService {
       return;
     }
 
+    // ✅ 연결 시도할 때 재연결 플래그 리셋
+    this.shouldReconnect = true;
+
     this.client = new Client({
       webSocketFactory: () => new SockJS(`${API_BASE_URL}/ws-stomp`),
       connectHeaders: {
-        Authorization: `Bearer ${token}`, // ✅ 토큰을 헤더에 포함
+        Authorization: `Bearer ${token}`,
       },
       debug: (str) => {
         console.log("[STOMP Debug]", str);
@@ -86,7 +90,12 @@ class WebSocketService {
       },
       onDisconnect: () => {
         console.warn("⚠️ WebSocket Disconnected");
-        this.handleReconnect(onConnected, onError);
+        // ✅ shouldReconnect가 true일 때만 재연결 시도
+        if (this.shouldReconnect) {
+          this.handleReconnect(onConnected, onError);
+        } else {
+          console.log("🚫 Reconnection disabled - will not reconnect");
+        }
       },
     });
 
@@ -100,13 +109,22 @@ class WebSocketService {
     onConnected?: () => void,
     onError?: (error: any) => void
   ) {
+    // ✅ 재연결 시도 전에도 플래그 확인
+    if (!this.shouldReconnect) {
+      console.log("🚫 Reconnection disabled");
+      return;
+    }
+
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       console.log(
         `🔄 Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`
       );
       setTimeout(() => {
-        this.connect(onConnected, onError);
+        // ✅ 실제 연결 전에도 플래그 재확인
+        if (this.shouldReconnect) {
+          this.connect(onConnected, onError);
+        }
       }, this.reconnectDelay * this.reconnectAttempts);
     } else {
       console.error("❌ Max reconnection attempts reached");
@@ -130,7 +148,6 @@ class WebSocketService {
       return;
     }
 
-    // ✅ 백엔드 경로 형식: /sub/chat/{roomType}/{roomId}
     const destination = `/sub/chat/${roomType.toLowerCase()}/${roomId}`;
     const subscriptionKey = `${roomType}-${roomId}`;
 
@@ -183,13 +200,12 @@ class WebSocketService {
       throw new Error("WebSocket not connected");
     }
 
-    // ✅ sender 필드 제거 (서버에서 토큰으로 자동 설정)
     const messagePayload = {
       type: payload.type,
       roomType: payload.roomType,
       roomId: payload.roomId,
       message: payload.message,
-      ...(payload.refId !== undefined && { refId: payload.refId }), // refId가 있으면 포함 (0 포함)
+      ...(payload.refId !== undefined && { refId: payload.refId }),
     };
 
     this.client.publish({
@@ -202,8 +218,12 @@ class WebSocketService {
 
   /**
    * 연결 해제
+   * @param preventReconnect true면 재연결 차단 (기본값), false면 재연결 허용
    */
-  disconnect() {
+  disconnect(preventReconnect: boolean = true) {
+    // ✅ 재연결 플래그 설정
+    this.shouldReconnect = !preventReconnect;
+    
     if (this.client) {
       // 모든 구독 해제
       this.subscriptions.forEach((subscription) => subscription.unsubscribe());
@@ -211,8 +231,22 @@ class WebSocketService {
 
       this.client.deactivate();
       this.client = null;
-      console.log("✅ WebSocket Disconnected");
+      
+      console.log(
+        preventReconnect 
+          ? "✅ WebSocket Disconnected (reconnection prevented)" 
+          : "✅ WebSocket Disconnected (reconnection allowed)"
+      );
     }
+  }
+
+  /**
+   * 재연결 허용/차단 설정
+   * @param allow true면 재연결 허용, false면 차단
+   */
+  setReconnectEnabled(allow: boolean) {
+    this.shouldReconnect = allow;
+    console.log(`🔧 Reconnection ${allow ? 'enabled' : 'disabled'}`);
   }
 
   /**
