@@ -202,7 +202,7 @@ const OpenStudyRoomPage: React.FC = () => {
       intervalRef.current = null;
     }
 
-    // ✅ "공부중" 상태일 때만 타이머 시작
+    // "공부중" 상태일 때만 타이머 시작
     if (myStatus === "studying") {
       intervalRef.current = setInterval(() => {
         setCurrentSeconds((prevSeconds) => prevSeconds + 1);
@@ -217,200 +217,197 @@ const OpenStudyRoomPage: React.FC = () => {
     };
   }, [myStatus]);
 
-// ✅ WebSocket 메시지 수신 처리
-const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
-  console.log("📩 WebSocket message received:", wsMessage);
+  // WebSocket 메시지 수신 처리
+  const handleWebSocketMessage = (wsMessage: WebSocketMessage) => {
+    console.log("📩 WebSocket message received:", wsMessage);
 
-  // ✅ id 또는 messageId 사용
-  const messageId = wsMessage.id || wsMessage.messageId || 0;
+    const messageId = wsMessage.id || wsMessage.messageId || 0;
 
-  const newMessage: ChatMessage = {
-    id: messageId,  // ✅ 둘 중 하나 사용
-    type: wsMessage.type,
-    sender: wsMessage.sender,
-    senderId: undefined,
-    senderProfileImage: undefined,
-    content: wsMessage.message,
-    imageUrl: wsMessage.imageUrl,
-    timestamp: new Date(wsMessage.sentAt),
-    refId: wsMessage.refId,
-    isSolved: wsMessage.isSolved,
-  };
-
-  if (wsMessage.type === "QUESTION") {
-    newMessage.status = "open";
-    newMessage.answers = [];
-    console.log("➕ Adding QUESTION message:", newMessage);
-    setMessages((prev) => [...prev, newMessage]);
-    
-  } else if (wsMessage.type === "ANSWER") {
-    console.log("💬 ANSWER received:", {
+    const newMessage: ChatMessage = {
       id: messageId,
-      refId: wsMessage.refId,
+      type: wsMessage.type,
       sender: wsMessage.sender,
-      message: wsMessage.message,
-    });
+      senderId: undefined,
+      senderProfileImage: undefined,
+      content: wsMessage.message,
+      imageUrl: wsMessage.imageUrl,
+      timestamp: new Date(wsMessage.sentAt),
+      refId: wsMessage.refId,
+      isSolved: wsMessage.isSolved,
+    };
 
-    if (!wsMessage.refId) {
-      console.error("❌ ANSWER has no refId!");
-      return;
-    }
-
-    setMessages((prev) => {
-      const updated = prev.map((msg) => {
-        if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-          console.log("✅ Found matching QUESTION:", msg.id);
-
-          const newAnswer: HelpAnswer = {
-            id: messageId,  // ✅ 수정
-            answerer: wsMessage.sender,
-            answererId: undefined,
-            answererProfileImage: undefined,
-            content: wsMessage.message,
-            timestamp: new Date(wsMessage.sentAt),
-            isAccepted: false,
-          };
-
-          console.log("➕ Adding answer to question:", newAnswer);
-
-          return {
-            ...msg,
-            answers: [...(msg.answers || []), newAnswer],
-            status: "helping" as const,
-          };
-        }
-        return msg;
+    if (wsMessage.type === "QUESTION") {
+      newMessage.status = "open";
+      newMessage.answers = [];
+      console.log("➕ Adding QUESTION message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+      
+    } else if (wsMessage.type === "ANSWER") {
+      console.log("💬 ANSWER received:", {
+        id: messageId,
+        refId: wsMessage.refId,
+        sender: wsMessage.sender,
+        message: wsMessage.message,
       });
 
-      console.log("📦 Updated messages:", updated);
-      return updated;
-    });
-    
-  } else if (wsMessage.type === "SOLVE") {
-    console.log("✅ SOLVE message received:", wsMessage);
+      if (!wsMessage.refId) {
+        console.error("❌ ANSWER has no refId!");
+        return;
+      }
 
-    if (wsMessage.refId) {
-      setMessages((prev) =>
-        prev.map((msg) => {
+      setMessages((prev) => {
+        const updated = prev.map((msg) => {
           if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
-            console.log("✅ Marking question as SOLVED:", msg.id);
+            console.log("✅ Found matching QUESTION:", msg.id);
+
+            const newAnswer: HelpAnswer = {
+              id: messageId,
+              answerer: wsMessage.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: wsMessage.message,
+              timestamp: new Date(wsMessage.sentAt),
+              isAccepted: false,
+            };
+
+            console.log("➕ Adding answer to question:", newAnswer);
+
             return {
               ...msg,
-              status: "resolved" as const,
-              isSolved: true,
+              answers: [...(msg.answers || []), newAnswer],
+              status: "helping" as const,
             };
           }
           return msg;
-        })
-      );
-    }
-    
-    addSystemMessage(wsMessage.message);
-    
-  } else if (wsMessage.type === "SYSTEM") {
-    addSystemMessage(wsMessage.message);
-    
-  } else {
-    console.log("➕ Adding TALK message:", newMessage);
-    setMessages((prev) => [...prev, newMessage]);
-  }
-};
+        });
 
-  // ✅ 채팅 내역 불러오기
-const loadChatHistory = async (roomIdNum: number) => {
-  try {
-    const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
-    
-    console.log("📦 Chat history response:", response);
-    
-    // ✅ 배열로 직접 반환됨
-    if (!Array.isArray(response)) {
-      console.warn("⚠️ Chat history is not an array:", response);
-      setMessages([]);
-      return;
-    }
-    
-    if (response.length === 0) {
-      console.log("✅ No chat history found");
-      setMessages([]);
-      return;
-    }
-    
-    // API 응답을 ChatMessage 형식으로 변환
-    const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
-      const baseMessage: ChatMessage = {
-        id: apiMsg.id,  // ✅ id 사용
-        type: apiMsg.type,
-        sender: apiMsg.sender,
-        senderId: undefined,
-        senderProfileImage: undefined,
-        content: apiMsg.message,
-        imageUrl: apiMsg.imageUrl,
-        timestamp: new Date(apiMsg.sentAt),  // ✅ sentAt 사용
-        refId: apiMsg.refId,
-        isSolved: apiMsg.isSolved,
-      };
+        console.log("📦 Updated messages:", updated);
+        return updated;
+      });
+      
+    } else if (wsMessage.type === "SOLVE") {
+      console.log("✅ SOLVE message received:", wsMessage);
 
-      if (apiMsg.type === "QUESTION") {
-        baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
-        baseMessage.answers = [];
-      }
-
-      return baseMessage;
-    });
-
-    // 답변 메시지들을 해당 질문에 연결
-    loadedMessages.forEach((msg) => {
-      if (msg.type === "ANSWER" && msg.refId) {
-        const questionMsg = loadedMessages.find(
-          (m) => m.id === msg.refId && m.type === "QUESTION"
+      if (wsMessage.refId) {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id === wsMessage.refId && msg.type === "QUESTION") {
+              console.log("✅ Marking question as SOLVED:", msg.id);
+              return {
+                ...msg,
+                status: "resolved" as const,
+                isSolved: true,
+              };
+            }
+            return msg;
+          })
         );
-        if (questionMsg) {
-          const answer: HelpAnswer = {
-            id: msg.id,
-            answerer: msg.sender,
-            answererId: undefined,
-            answererProfileImage: undefined,
-            content: msg.content,
-            timestamp: msg.timestamp,
-          };
-          if (!questionMsg.answers) questionMsg.answers = [];
-          questionMsg.answers.push(answer);
-          if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
-            questionMsg.status = "helping";
+      }
+      
+      addSystemMessage(wsMessage.message);
+      
+    } else if (wsMessage.type === "SYSTEM") {
+      addSystemMessage(wsMessage.message);
+      
+    } else {
+      console.log("➕ Adding TALK message:", newMessage);
+      setMessages((prev) => [...prev, newMessage]);
+    }
+  };
+
+  // 채팅 내역 불러오기
+  const loadChatHistory = async (roomIdNum: number) => {
+    try {
+      const response = await chatAPI.getChatHistory(roomIdNum, "OPEN", 0);
+      
+      console.log("📦 Chat history response:", response);
+      
+      if (!Array.isArray(response)) {
+        console.warn("⚠️ Chat history is not an array:", response);
+        setMessages([]);
+        return;
+      }
+      
+      if (response.length === 0) {
+        console.log("✅ No chat history found");
+        setMessages([]);
+        return;
+      }
+      
+      const loadedMessages: ChatMessage[] = response.map((apiMsg) => {
+        const baseMessage: ChatMessage = {
+          id: apiMsg.id,
+          type: apiMsg.type,
+          sender: apiMsg.sender,
+          senderId: undefined,
+          senderProfileImage: undefined,
+          content: apiMsg.message,
+          imageUrl: apiMsg.imageUrl,
+          timestamp: new Date(apiMsg.sentAt),
+          refId: apiMsg.refId,
+          isSolved: apiMsg.isSolved,
+        };
+
+        if (apiMsg.type === "QUESTION") {
+          baseMessage.status = apiMsg.isSolved ? "resolved" : "open";
+          baseMessage.answers = [];
+        }
+
+        return baseMessage;
+      });
+
+      loadedMessages.forEach((msg) => {
+        if (msg.type === "ANSWER" && msg.refId) {
+          const questionMsg = loadedMessages.find(
+            (m) => m.id === msg.refId && m.type === "QUESTION"
+          );
+          if (questionMsg) {
+            const answer: HelpAnswer = {
+              id: msg.id,
+              answerer: msg.sender,
+              answererId: undefined,
+              answererProfileImage: undefined,
+              content: msg.content,
+              timestamp: msg.timestamp,
+            };
+            if (!questionMsg.answers) questionMsg.answers = [];
+            questionMsg.answers.push(answer);
+            if (questionMsg.answers.length > 0 && !questionMsg.isSolved) {
+              questionMsg.status = "helping";
+            }
           }
         }
-      }
-    });
+      });
 
-    // ANSWER 타입 제외
-    const filteredMessages = loadedMessages.filter(
-      (msg) => msg.type !== "ANSWER"
-    );
+      const filteredMessages = loadedMessages.filter(
+        (msg) => msg.type !== "ANSWER"
+      );
 
-    setMessages(filteredMessages);
-    console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
-  } catch (error) {
-    console.error("❌ Failed to load chat history:", error);
-    setMessages([]);
-  }
-};
+      setMessages(filteredMessages);
+      console.log("✅ Chat history loaded:", filteredMessages.length, "messages");
+    } catch (error) {
+      console.error("❌ Failed to load chat history:", error);
+      setMessages([]);
+    }
+  };
 
-  // ✅ 방 입장 및 WebSocket 연결
+  // ✅ 방 입장 로직 개선 - 새로고침 처리 강화
   useEffect(() => {
     if (!user || !roomId || hasJoinedRef.current) return;
 
     const joinRoom = async () => {
       try {
         setLoading(true);
-        console.log("Attempting to join room:", roomId);
+        console.log("🚪 Attempting to join room:", roomId);
 
+        // 1. 방 정보 조회
         let roomData: OpenStudyRoom;
         try {
           roomData = await openStudyAPI.getRoom(roomId);
-          console.log("Room data loaded:", roomData);
+          console.log("✅ Room data loaded:", roomData);
           setRoomInfo(roomData);
 
+          // 초기 참여자 목록 설정 (방장만)
           setParticipants([
             {
               id: "creator",
@@ -420,7 +417,7 @@ const loadChatHistory = async (roomIdNum: number) => {
             },
           ]);
         } catch (error: any) {
-          console.error("Failed to get room info:", error);
+          console.error("❌ Failed to get room info:", error);
           toast({
             title: "오류",
             description: "방 정보를 불러올 수 없습니다.",
@@ -430,74 +427,39 @@ const loadChatHistory = async (roomIdNum: number) => {
           return;
         }
 
+        // 2. 방장 여부 확인
         const isCreator =
           roomData.creatorUsername === user.username ||
           (roomData.createdBy && roomData.createdBy === user.id);
 
+        console.log("👤 User role:", isCreator ? "방장" : "참여자");
+
+        // 3. 비방장만 입장 API 호출 (방장은 이미 입장되어 있음)
         if (!isCreator) {
           try {
             await openStudyAPI.joinRoom(roomId);
-            console.log("Successfully joined room via API");
+            console.log("✅ Successfully joined room via API");
           } catch (joinError: any) {
-            if (
-              joinError?.message?.includes("이미") ||
-              joinError?.message?.includes("already") ||
-              joinError?.message?.includes("409")
-            ) {
-              console.log("Already in room, continuing...");
+            const errorMsg = String(joinError?.message || "");
+            console.warn("⚠️ Join room API error:", errorMsg);
+
+            // 이미 참여 중인 경우 (409, "이미", "already" 등)
+            const isAlreadyJoinedError =
+              errorMsg.includes("409") ||
+              errorMsg.includes("이미") ||
+              errorMsg.toLowerCase().includes("already");
+
+            if (isAlreadyJoinedError) {
+              console.log("ℹ️ Already joined - treating as success (refresh scenario)");
+              // 에러를 무시하고 계속 진행 (새로고침 시나리오)
             } else {
+              // 진짜 에러 (방이 삭제됨, 정원 초과 등)
+              console.error("❌ Real join error:", errorMsg);
               throw joinError;
             }
           }
-        } else {
-          console.log("Room creator, skipping joinRoom call");
-        }
 
-        // ✅ WebSocket 연결
-        webSocketService.connect(
-          () => {
-            console.log("WebSocket connected successfully");
-            const roomIdNum = parseInt(roomId, 10);
-            
-            // 채팅 내역 불러오기
-            loadChatHistory(roomIdNum);
-            
-            // 구독 시작
-            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
-          },
-          (error) => {
-            console.error("WebSocket connection failed:", error);
-            toast({
-              title: "연결 오류",
-              description: "채팅 서버 연결에 실패했습니다.",
-              variant: "destructive",
-            });
-          }
-        );
-
-        // ✅ 스터디 세션 시작
-        try {
-          const roomIdNum = parseInt(roomId, 10);
-          if (!isNaN(roomIdNum)) {
-            console.log("Starting session...");
-            const sessionResponse = await sessionAPI.startSession({
-              studyType: "OPEN_STUDY",
-              roomId: roomIdNum,
-            });
-            console.log("Session started:", sessionResponse);
-
-            setSessionId(sessionResponse.sessionId);
-            setIsSessionActive(true);
-            setCurrentSeconds(0);
-          }
-        } catch (sessionError: any) {
-          console.error("Failed to start session:", sessionError);
-        }
-
-        localStorage.setItem("currentOpenStudyRoom", roomId);
-        hasJoinedRef.current = true;
-
-        if (roomData.creatorUsername !== user.username) {
+          // 비방장 자신을 참여자 목록에 추가
           setParticipants((prev) => [
             ...prev,
             {
@@ -509,6 +471,60 @@ const loadChatHistory = async (roomIdNum: number) => {
           ]);
         }
 
+        // 4. WebSocket 연결
+        const roomIdNum = parseInt(roomId, 10);
+        webSocketService.connect(
+          () => {
+            console.log("🔌 WebSocket connected successfully");
+            loadChatHistory(roomIdNum);
+            webSocketService.subscribe(roomIdNum, "OPEN", handleWebSocketMessage);
+          },
+          (error) => {
+            console.error("❌ WebSocket connection failed:", error);
+            toast({
+              title: "연결 오류",
+              description: "채팅 서버 연결에 실패했습니다.",
+              variant: "destructive",
+            });
+          }
+        );
+
+        // 5. 스터디 세션 시작
+        try {
+          if (!isNaN(roomIdNum)) {
+            console.log("⏱️ Starting session...");
+            const sessionResponse = await sessionAPI.startSession({
+              studyType: "OPEN_STUDY",
+              roomId: roomIdNum,
+            });
+            console.log("✅ Session started:", sessionResponse);
+
+            setSessionId(sessionResponse.sessionId);
+            setIsSessionActive(true);
+            setCurrentSeconds(0);
+          }
+        } catch (sessionError: any) {
+          const sessionMsg = String(sessionError?.message || "");
+          console.warn("⚠️ Session start error:", sessionMsg);
+
+          // 이미 활성 세션이 있는 경우
+          const isActiveSessionError =
+            sessionMsg.includes("이미") ||
+            sessionMsg.toLowerCase().includes("already active");
+
+          if (isActiveSessionError) {
+            console.log("ℹ️ Already has active session - continuing...");
+            // 세션 에러를 무시하고 계속 진행
+          } else {
+            console.warn("⚠️ Session error (non-critical):", sessionError);
+            // 세션 시작 실패해도 방 입장은 유지
+          }
+        }
+
+        // 6. 로컬 저장소에 현재 방 ID 저장
+        localStorage.setItem("currentOpenStudyRoom", roomId);
+        hasJoinedRef.current = true;
+
         toast({
           title: "입장 완료",
           description: `${roomData.title}에 입장했습니다.`,
@@ -516,7 +532,7 @@ const loadChatHistory = async (roomIdNum: number) => {
 
         setLoading(false);
       } catch (error: any) {
-        console.error("Failed to join room:", error);
+        console.error("❌ Failed to join room:", error);
 
         toast({
           title: "입장 실패",
@@ -524,6 +540,7 @@ const loadChatHistory = async (roomIdNum: number) => {
           variant: "destructive",
         });
 
+        // 실패 시 로컬 저장소 정리
         localStorage.removeItem("currentOpenStudyRoom");
         setLoading(false);
         navigate("/open-study");
@@ -532,7 +549,7 @@ const loadChatHistory = async (roomIdNum: number) => {
 
     joinRoom();
 
-    // Cleanup
+    // Cleanup: WebSocket 연결 해제
     return () => {
       if (roomId && hasJoinedRef.current) {
         const roomIdNum = parseInt(roomId, 10);
@@ -544,49 +561,48 @@ const loadChatHistory = async (roomIdNum: number) => {
     };
   }, [user, roomId, navigate]);
 
-  
+  // ✅ 수정된 코드 (새로고침 허용)
+useEffect(() => {
+  const handleBeforeUnload = () => {
+    if (!roomId || !hasJoinedRef.current || isLeavingRef.current) return;
 
-  // 브라우저 이벤트 처리
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        isLeavingRef.current = true;
-        localStorage.removeItem("currentOpenStudyRoom");
+    console.log("🔄 Page refresh/close detected");
 
-        const baseURL =
-          import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
-        const url = `${baseURL}/api/open-study/rooms/${roomId}/leave`;
+    // ✅ 새로고침 시에는 서버에 leave 요청 안 함 (방장/비방장 공통)
+    // 로컬 저장소만 정리
+    localStorage.removeItem("currentOpenStudyRoom");
+    
+    console.log("✅ Keeping server-side room state for refresh");
+  };
 
-        fetch(url, {
-          method: "POST",
-          credentials: "include",
-          keepalive: true,
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        }).catch((err) => console.error("Failed to leave room:", err));
-      }
-    };
+  window.addEventListener("beforeunload", handleBeforeUnload);
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
+  return () => {
+    window.removeEventListener("beforeunload", handleBeforeUnload);
+    
+    // ✅ 컴포넌트 언마운트 시 (라우터 이동)에만 실제 퇴장 처리
+    if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
+      console.log("🚪 Component unmounting (route change) → calling leaveRoom");
+      leaveRoom();
+    }
+  };
+}, [roomId]);
 
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (roomId && hasJoinedRef.current && !isLeavingRef.current) {
-        leaveRoom();
-      }
-    };
-  }, [roomId]);
-
+  // 방 나가기 함수
   const leaveRoom = async () => {
     if (!roomId || isLeavingRef.current) return;
+    
+    console.log("🚪 Leaving room:", roomId);
     isLeavingRef.current = true;
 
     try {
       localStorage.removeItem("currentOpenStudyRoom");
       await openStudyAPI.leaveRoom(roomId);
+      console.log("✅ Successfully left room");
       hasJoinedRef.current = false;
     } catch (error) {
-      console.error("Failed to leave room:", error);
+      console.error("❌ Failed to leave room:", error);
+      // 에러가 나도 로컬 상태는 정리
       localStorage.removeItem("currentOpenStudyRoom");
       hasJoinedRef.current = false;
     }
@@ -629,7 +645,7 @@ const loadChatHistory = async (roomIdNum: number) => {
     });
   };
 
-  // ✅ 메시지 전송 (WebSocket 사용)
+  // 메시지 전송 (WebSocket 사용)
   const handleSendMessage = async () => {
     if (!messageInput.trim() || !roomId) return;
 
@@ -637,15 +653,7 @@ const loadChatHistory = async (roomIdNum: number) => {
       const roomIdNum = parseInt(roomId, 10);
 
       if (isQuestionMode) {
-        // 이미지 업로드가 있으면 먼저 업로드
-        let uploadedImageUrl: string | undefined;
-        if (questionImage) {
-          // questionImage는 현재 Blob URL이므로 실제 파일을 다시 가져와야 함
-          // 실제 구현에서는 파일을 state로 관리하는 것이 좋음
-          // 여기서는 간단히 처리
-        }
-
-        // 질문 메시지 전송
+        // TODO: 질문 이미지 업로드 연동
         webSocketService.sendMessage({
           type: "QUESTION",
           roomType: "OPEN",
@@ -663,7 +671,6 @@ const loadChatHistory = async (roomIdNum: number) => {
           description: "질문이 등록되었습니다. 다른 참여자들이 답변해줄 거예요!",
         });
       } else {
-        // 일반 텍스트 메시지 전송
         webSocketService.sendMessage({
           type: "TALK",
           roomType: "OPEN",
@@ -694,52 +701,52 @@ const loadChatHistory = async (roomIdNum: number) => {
     setMessages((prev) => [...prev, newMessage]);
   };
 
-  // ✅ 이미지 업로드
-const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-  const file = e.target.files?.[0];
-  if (!file) return;
+  // 이미지 업로드
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  if (file.size > 10 * 1024 * 1024) {
-    toast({
-      title: "오류",
-      description: "이미지 크기는 10MB를 초과할 수 없습니다.",
-      variant: "destructive",
-    });
-    return;
-  }
-
-  if (isQuestionMode) {
-    const imageUrl = URL.createObjectURL(file);
-    setQuestionImage(imageUrl);
-    setQuestionFileName(file.name);
-  } else {
-    try {
-      const imageUrl = await chatAPI.uploadImage(file);  // ✅ string 직접 반환
-      
-      if (roomId) {
-        const roomIdNum = parseInt(roomId, 10);
-        webSocketService.sendMessage({
-          type: "TALK",
-          roomType: "OPEN",
-          roomId: roomIdNum,
-          message: imageUrl,  // ✅ URL 직접 사용
-        });
-      }
-
+    if (file.size > 10 * 1024 * 1024) {
       toast({
-        title: "이미지 전송 완료",
-        description: "이미지가 전송되었습니다.",
-      });
-    } catch (error: any) {
-      console.error("Failed to upload image:", error);
-      toast({
-        title: "업로드 실패",
-        description: error?.message || "이미지 업로드에 실패했습니다.",
+        title: "오류",
+        description: "이미지 크기는 10MB를 초과할 수 없습니다.",
         variant: "destructive",
       });
+      return;
     }
-  }
-};
+
+    if (isQuestionMode) {
+      const imageUrl = URL.createObjectURL(file);
+      setQuestionImage(imageUrl);
+      setQuestionFileName(file.name);
+    } else {
+      try {
+        const imageUrl = await chatAPI.uploadImage(file);
+        
+        if (roomId) {
+          const roomIdNum = parseInt(roomId, 10);
+          webSocketService.sendMessage({
+            type: "TALK",
+            roomType: "OPEN",
+            roomId: roomIdNum,
+            message: imageUrl,
+          });
+        }
+
+        toast({
+          title: "이미지 전송 완료",
+          description: "이미지가 전송되었습니다.",
+        });
+      } catch (error: any) {
+        console.error("Failed to upload image:", error);
+        toast({
+          title: "업로드 실패",
+          description: error?.message || "이미지 업로드에 실패했습니다.",
+          variant: "destructive",
+        });
+      }
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -754,93 +761,88 @@ const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       return;
     }
 
-    // TODO: 파일 업로드 API 구현 필요
     toast({
       title: "준비중",
       description: "파일 업로드 기능은 준비중입니다.",
     });
   };
 
-// ✅ 답변 제출 (WebSocket 사용)
-const handleSubmitAnswer = (questionId: number) => {
-  console.log("🔍 handleSubmitAnswer called with questionId:", questionId);
-  console.log("🔍 questionId type:", typeof questionId);
-  
-  const answerText = answerInputs[questionId];
-  console.log("🔍 answerText:", answerText);
-  console.log("🔍 answerInputs:", answerInputs);
-  
-  if (!answerText?.trim() || !roomId) {
-    console.log("❌ Validation failed:", { answerText, roomId });
-    return;
-  }
+  // 답변 제출 (WebSocket 사용)
+  const handleSubmitAnswer = (questionId: number) => {
+    console.log("🔍 handleSubmitAnswer called with questionId:", questionId);
+    
+    const answerText = answerInputs[questionId];
+    console.log("🔍 answerText:", answerText);
+    
+    if (!answerText?.trim() || !roomId) {
+      console.log("❌ Validation failed:", { answerText, roomId });
+      return;
+    }
 
-  try {
-    const roomIdNum = parseInt(roomId, 10);
+    try {
+      const roomIdNum = parseInt(roomId, 10);
 
-    console.log("📤 Sending ANSWER with refId:", questionId);
+      console.log("📤 Sending ANSWER with refId:", questionId);
 
-    webSocketService.sendMessage({
-      type: "ANSWER",
-      roomType: "OPEN",
-      roomId: roomIdNum,
-      message: answerText,
-      refId: questionId,
-    });
+      webSocketService.sendMessage({
+        type: "ANSWER",
+        roomType: "OPEN",
+        roomId: roomIdNum,
+        message: answerText,
+        refId: questionId,
+      });
 
-    setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
+      setAnswerInputs((prev) => ({ ...prev, [questionId]: "" }));
 
-    toast({
-      title: "답변 등록",
-      description: "답변이 등록되었습니다!",
-    });
-  } catch (error: any) {
-    console.error("Failed to submit answer:", error);
-    toast({
-      title: "전송 실패",
-      description: error?.message || "답변 전송에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+      toast({
+        title: "답변 등록",
+        description: "답변이 등록되었습니다!",
+      });
+    } catch (error: any) {
+      console.error("Failed to submit answer:", error);
+      toast({
+        title: "전송 실패",
+        description: error?.message || "답변 전송에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
+  };
 
-// ✅ 답변 채택 (REST API 사용)
-const handleAcceptAnswer = async (questionId: number, answerId: number) => {
-  try {
-    console.log("👑 Accepting answer:", { questionId, answerId });
+  // 답변 채택 (REST API 사용)
+  const handleAcceptAnswer = async (questionId: number, answerId: number) => {
+    try {
+      console.log("👑 Accepting answer:", { questionId, answerId });
 
-    // ✅ REST API 호출
-    await chatAPI.solveQuestion(questionId, answerId);
+      await chatAPI.solveQuestion(questionId, answerId);
 
-    // ✅ 로컬 상태 즉시 업데이트 (서버에서도 SOLVE 메시지 보내지만 UI 즉시 반영)
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg.id === questionId && msg.type === "QUESTION"
-          ? {
-              ...msg,
-              answers: msg.answers?.map((ans) =>
-                ans.id === answerId ? { ...ans, isAccepted: true } : ans
-              ),
-              status: "resolved" as const,
-              isSolved: true,
-            }
-          : msg
-      )
-    );
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === questionId && msg.type === "QUESTION"
+            ? {
+                ...msg,
+                answers: msg.answers?.map((ans) =>
+                  ans.id === answerId ? { ...ans, isAccepted: true } : ans
+                ),
+                status: "resolved" as const,
+                isSolved: true,
+              }
+            : msg
+        )
+      );
 
-    toast({
-      title: "답변 채택 완료",
-      description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
-    });
-  } catch (error: any) {
-    console.error("Failed to accept answer:", error);
-    toast({
-      title: "채택 실패",
-      description: error?.message || "답변 채택에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+      toast({
+        title: "답변 채택 완료",
+        description: "답변이 채택되어 질문이 해결되었습니다! 🎉",
+      });
+    } catch (error: any) {
+      console.error("Failed to accept answer:", error);
+      toast({
+        title: "채택 실패",
+        description: error?.message || "답변 채택에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // 질문으로 스크롤
   const scrollToQuestion = (questionId: number) => {
@@ -858,28 +860,28 @@ const handleAcceptAnswer = async (questionId: number, answerId: number) => {
     }, 100);
   };
 
-// ✅ 질문 삭제 (REST API 사용)
-const handleDeleteQuestion = async (questionId: number) => {
-  try {
-    console.log("🗑️ Deleting question:", questionId);
-    
-    await chatAPI.deleteMessage(questionId);
+  // 질문 삭제
+  const handleDeleteQuestion = async (questionId: number) => {
+    try {
+      console.log("🗑️ Deleting question:", questionId);
+      
+      await chatAPI.deleteMessage(questionId);
 
-    setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
+      setMessages((prev) => prev.filter((msg) => msg.id !== questionId));
 
-    toast({
-      title: "삭제 완료",
-      description: "질문이 삭제되었습니다.",
-    });
-  } catch (error: any) {
-    console.error("Failed to delete question:", error);
-    toast({
-      title: "삭제 실패",
-      description: error?.message || "질문 삭제에 실패했습니다.",
-      variant: "destructive",
-    });
-  }
-};
+      toast({
+        title: "삭제 완료",
+        description: "질문이 삭제되었습니다.",
+      });
+    } catch (error: any) {
+      console.error("Failed to delete question:", error);
+      toast({
+        title: "삭제 실패",
+        description: error?.message || "질문 삭제에 실패했습니다.",
+        variant: "destructive",
+      });
+    }
+  };
 
   const handleCopyInviteLink = () => {
     const inviteLink = `${window.location.origin}/#/open-study/room/${roomId}`;
@@ -909,7 +911,7 @@ const handleDeleteQuestion = async (questionId: number) => {
       }
     }
 
-    // ✅ 스터디 세션 종료
+    // 스터디 세션 종료
     if (sessionId !== null) {
       try {
         const endResult = await sessionAPI.endSession(sessionId);
@@ -1282,16 +1284,16 @@ const handleDeleteQuestion = async (questionId: number) => {
                           </span>
                         </div>
                       </div>
-{message.sender === user?.username && (
-  <Button
-    variant="ghost"
-    size="sm"
-    className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-    onClick={() => handleDeleteQuestion(message.id)}
-  >
-    <X className="w-4 h-4" />
-  </Button>
-)}
+                      {message.sender === user?.username && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDeleteQuestion(message.id)}
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      )}
                     </div>
 
                     <div className="bg-white rounded-lg p-3 shadow-sm">
@@ -1378,17 +1380,17 @@ const handleDeleteQuestion = async (questionId: number) => {
                                   {formatRelativeTime(answer.timestamp)}
                                 </span>
                               </div>
-{message.sender === user?.username && (
-  <Button
-    variant="ghost"
-    size="sm"
-    className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
-    onClick={() => handleAcceptAnswer(message.id, answer.id)}
-  >
-    <CheckCircle className="w-4 h-4 mr-1" />
-    채택
-  </Button>
-)}
+                              {message.sender === user?.username && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-green-600 hover:text-green-700 hover:bg-green-50"
+                                  onClick={() => handleAcceptAnswer(message.id, answer.id)}
+                                >
+                                  <CheckCircle className="w-4 h-4 mr-1" />
+                                  채택
+                                </Button>
+                              )}
                             </div>
                             <p className="text-sm text-gray-800 pl-8">
                               {answer.content}
@@ -1414,16 +1416,13 @@ const handleDeleteQuestion = async (questionId: number) => {
                           }
                           className="flex-1 bg-white"
                         />
-<Button
-  size="sm"
-  onClick={() => {
-    console.log("🔘 Button clicked, message.id:", message.id, "type:", typeof message.id);
-    handleSubmitAnswer(message.id);
-  }}
-  disabled={!answerInputs[message.id]?.trim()}
->
-  <Send className="w-4 h-4" />
-</Button>
+                        <Button
+                          size="sm"
+                          onClick={() => handleSubmitAnswer(message.id)}
+                          disabled={!answerInputs[message.id]?.trim()}
+                        >
+                          <Send className="w-4 h-4" />
+                        </Button>
                       </div>
                     )}
                   </div>
