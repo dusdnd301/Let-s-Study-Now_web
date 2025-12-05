@@ -26,7 +26,7 @@ const STUDY_FIELDS = [
 ];
 
 const Profile: React.FC = () => {
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, logout } = useAuth();
   const [loading, setLoading] = useState(false);
   const [profileImage, setProfileImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string>("");
@@ -90,72 +90,77 @@ const Profile: React.FC = () => {
   };
 
   // ✅ 프로필 업데이트 (PATCH /api/update/profile)
-  const handleProfileUpdate = async () => {
-    if (!profileData.studyField.trim()) {
-      toast({
-        title: "오류",
-        description: "공부 분야를 선택해주세요.",
-        variant: "destructive",
-      });
-      return;
+const handleProfileUpdate = async () => {
+  if (!profileData.studyField.trim()) {
+    toast({
+      title: "오류",
+      description: "공부 분야를 선택해주세요.",
+      variant: "destructive",
+    });
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    // ✅ FormData 생성
+    const formData = new FormData();
+
+    // ✅ 전송할 JSON 데이터 객체
+    const dataObj: any = {
+      studyField: profileData.studyField,
+    };
+
+    if (profileData.bio && profileData.bio.trim()) {
+      dataObj.bio = profileData.bio;
     }
 
-    setLoading(true);
-    try {
-      // ✅ FormData 생성 (백엔드 API: data + image)
-      const formData = new FormData();
+    // ✅ 핵심 수정 부분: JSON을 application/json Blob으로 감싸서 전송
+    formData.append(
+      "data",
+      new Blob([JSON.stringify(dataObj)], { type: "application/json" })
+    );
 
-      // ✅ 방법 1: data를 JSON 문자열로 전송 (표준 방식)
-      const dataObj: any = {
-        studyField: profileData.studyField,
-      };
-
-      if (profileData.bio && profileData.bio.trim()) {
-        dataObj.bio = profileData.bio;
-      }
-
-      // data를 Blob으로 변환하여 전송 (Content-Type: application/json)
-      const dataBlob = new Blob([JSON.stringify(dataObj)], {
-        type: "application/json",
-      });
-      formData.append("data", dataBlob);
-
-      // ✅ image 파일이 있으면 추가 (선택 사항)
-      if (profileImage) {
-        formData.append("image", profileImage);
-      }
-
-      console.log("=== Sending FormData ===");
-      console.log("data:", JSON.stringify(dataObj));
-      console.log("image:", profileImage?.name || "없음");
-
-      // FormData 내용 확인 (디버깅)
-      for (let pair of formData.entries()) {
-        console.log(pair[0], pair[1]);
-      }
-
-      // ✅ PATCH 요청
-      await authAPI.updateProfile(formData);
-
-      toast({
-        title: "성공",
-        description: "프로필이 업데이트되었습니다.",
-      });
-
-      // 사용자 정보 새로고침
-      await refreshUser();
-      setProfileImage(null);
-    } catch (error: any) {
-      console.error("프로필 업데이트 에러:", error);
-      toast({
-        title: "오류",
-        description: error?.message || "프로필 업데이트에 실패했습니다.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
+    // ✅ image 파일이 있으면 추가 (선택 사항)
+    if (profileImage) {
+      formData.append("image", profileImage);
     }
-  };
+
+    console.log("=== Sending FormData (application/json + multipart) ===");
+    console.log("data:", dataObj);
+    console.log("image:", profileImage?.name || "없음");
+
+    // ✅ FormData 내부 확인 (디버깅용)
+    for (let pair of formData.entries()) {
+      console.log(pair[0], pair[1]);
+    }
+
+    // ✅ PATCH 요청
+    await authAPI.updateProfile(formData);
+
+    toast({
+      title: "성공",
+      description: "프로필이 업데이트되었습니다.",
+    });
+
+    // ✅ 사용자 정보 새로고침
+    await refreshUser();
+    setProfileImage(null);
+
+  } catch (error: any) {
+    console.error("프로필 업데이트 에러:", error);
+
+    toast({
+      title: "오류",
+      description: error?.message || "프로필 업데이트에 실패했습니다.",
+      variant: "destructive",
+    });
+
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   // ✅ 비밀번호 변경 (PATCH /api/update/password)
   const handlePasswordChange = async () => {
@@ -224,75 +229,50 @@ const Profile: React.FC = () => {
   };
 
   // ✅ 계정 삭제 (DELETE /api/delete/account)
-  const handleDeleteAccount = async () => {
-    if (!deletePassword.trim()) {
-      toast({
-        title: "오류",
-        description: "비밀번호를 입력해주세요.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (
-      !confirm("정말로 계정을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")
-    ) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      console.log("=== 계정 삭제 시작 ===");
-      console.log("deletePassword:", deletePassword ? "입력됨" : "비어있음");
-
-      // ✅ DELETE 요청, Response: string
-      const response = await authAPI.deleteAccount(deletePassword);
-
-      console.log("=== 계정 삭제 응답 ===");
-      console.log("response:", response);
-
-      toast({
-        title: "계정 삭제",
-        description:
-          typeof response === "string"
-            ? response
-            : "계정이 성공적으로 삭제되었습니다.",
-      });
-
-      // 로그아웃 처리
-      window.location.href = "#/login";
-    } catch (error: any) {
-      console.error("=== 계정 삭제 에러 ===", error);
-      toast({
-        title: "오류",
-        description: error?.message || "계정 삭제에 실패했습니다.",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <Navbar />
-        <div className="max-w-4xl mx-auto py-8 px-4">
-          <Card>
-            <CardContent className="text-center py-12">
-              <p className="text-gray-500">로그인이 필요합니다.</p>
-              <Button
-                className="mt-4"
-                onClick={() => (window.location.href = "#/login")}
-              >
-                로그인하기
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
+const handleDeleteAccount = async () => {
+  if (!deletePassword.trim()) {
+    toast({
+      title: "오류",
+      description: "비밀번호를 입력해주세요.",
+      variant: "destructive",
+    });
+    return;
   }
+
+  if (!confirm("정말로 계정을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const response = await authAPI.deleteAccount(deletePassword);
+
+// ✅ 계정 삭제 성공 메시지 (이건 유지)
+toast({
+  title: "계정 삭제 완료",
+  description:
+    typeof response === "string"
+      ? response
+      : "계정이 성공적으로 삭제되었습니다.",
+});
+
+// ✅ ✅ ✅ 로그아웃은 메시지 없이 실행
+await logout(false);
+
+// ✅ 로그인 화면 이동
+window.location.replace("#/login");
+
+  } catch (error: any) {
+    console.error("=== 계정 삭제 에러 ===", error);
+    toast({
+      title: "오류",
+      description: error?.message || "계정 삭제에 실패했습니다.",
+      variant: "destructive",
+    });
+  } finally {
+    setLoading(false);
+  }
+};
 
   // ✅ 경험치 정보 계산
   const userLevel = user.level || calculateLevel(user.exp || 0);

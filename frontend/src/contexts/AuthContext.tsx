@@ -13,7 +13,7 @@ interface AuthContextType {
   loading: boolean;
   login: (email: string, password: string) => Promise<boolean>;
   register: (data: any) => Promise<boolean>;
-  logout: () => Promise<void>;
+  logout: (showToast?: boolean) => Promise<void>; // ✅ 수정 완료
   updateUser: (userData: Partial<User>) => void;
   refreshUser: () => Promise<void>;
 }
@@ -38,18 +38,31 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // 앱 시작 시 로그인 상태 확인
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        const userData = await authAPI.getProfile();
-        if (userData) setUser(userData);
-      } catch (error) {
-        console.warn("Not logged in or failed to fetch profile:", error);
-        setUser(null);
-      } finally {
-        setLoading(false);
-      }
-    };
+const initAuth = async () => {
+  try {
+    const token = localStorage.getItem("accessToken");
 
+    // ✅ 토큰 없으면 profile 요청 자체를 안 함
+    if (!token) {
+      setUser(null);
+      return;
+    }
+
+    const userData = await authAPI.getProfile();
+    setUser(userData);
+
+  } catch (error) {
+    console.warn("프로필 조회 실패 (자동 로그아웃 처리):", error);
+
+    // ✅ 잘못된 토큰이면 완전 로그아웃 처리
+    localStorage.clear();
+    sessionStorage.clear();
+    setUser(null);
+
+  } finally {
+    setLoading(false);
+  }
+};
     initAuth();
   }, []);
 
@@ -138,19 +151,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   // ✅ 로그아웃
-  const logout = async (): Promise<void> => {
-    try {
-      await authAPI.logout();
-    } catch (error) {
-      console.warn("Logout request failed:", error);
-    } finally {
-      setUser(null);
+  const logout = async (showToast: boolean = true): Promise<void> => {
+  try {
+    await authAPI.logout();
+  } catch (error) {
+    console.warn("Logout request failed:", error);
+  } finally {
+    // ✅ 토큰 완전 삭제
+    localStorage.clear();
+    sessionStorage.clear();
+
+    // ✅ 사용자 상태 초기화
+    setUser(null);
+
+    // ✅ 일반 로그아웃일 때만 토스트 출력
+    if (showToast) {
       toast({
         title: "로그아웃 완료 👋",
         description: "다음에 또 만나요!",
       });
     }
-  };
+  }
+};
 
   const updateUser = (userData: Partial<User>) => {
     setUser((prev) => (prev ? { ...prev, ...userData } : null));
